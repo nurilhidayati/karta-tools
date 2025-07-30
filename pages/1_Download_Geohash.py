@@ -180,13 +180,6 @@ def create_map_with_data(boundary_geojson=None, geohash_geojson=None):
 st.set_page_config(layout="wide")
 st.title("📥 Download GeoHash")
 
-st.markdown("""
-Simple tool to convert administrative boundary areas to GeoHash6 format.
-1. **Select Country** - Choose from available countries in database
-2. **Select Region** - Pick a specific administrative area/region
-3. **Convert & Preview** - Generate GeoHash6 and preview on map
-4. **Download** - Get GeoHash6 as GeoJSON or CSV
-""")
 
 # Initialize session state for persistent data
 if 'geohash_result' not in st.session_state:

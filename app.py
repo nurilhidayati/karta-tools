@@ -609,9 +609,7 @@ def streamlit_complete_workflow_ui():
                     'data': selected_region_data
                 }
                 
-                st.info("🚀 **Starting workflow processing...**")
-                
-                with st.spinner("🔄 Processing complete workflow - this may take a few minutes..."):
+                with st.spinner("🔄 Processing - this may take a few minutes..."):
                     result = process_complete_geohash_workflow(
                         country_id=country_id,
                         region_data=selected_region_data,
