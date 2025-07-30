@@ -1,0 +1,27 @@
+# Temporary image files
+*.tmp
+tmp_*
+temp_*
+
+# Image thumbnails
+thumbs/
+thumbnails/
+
+# Original/backup images (if any)
+originals/
+backups/
+
+# Generated/processed images
+processed/
+resized/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

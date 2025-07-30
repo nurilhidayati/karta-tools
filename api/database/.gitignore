@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+
+# Migration files (if generated)
+migrations/versions/*.py
+!migrations/versions/__init__.py
+
+# Database backups
+*.sql
+*.dump
+
+# Connection logs
+connection.log
+
+# Temporary database files
+tmp_*
+temp_*

@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Router logs
+access.log
+error.log
+*.log
+
+# Temporary route files
+tmp_*
+temp_*
+
+# API documentation (if auto-generated)
+docs/generated/
+
+# Test files (if temporary)
+test_temp_*
+
+# IDE files
+.vscode/
+.idea/

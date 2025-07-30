@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Model artifacts
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+
+# Generated model files
+generated/
+exports/
+
+# Temporary model files
+tmp_*
+temp_*
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log

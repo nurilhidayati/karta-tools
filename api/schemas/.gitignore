@@ -1,0 +1,24 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated schema files
+generated/
+auto_generated/
+
+# Schema validation logs
+validation.log
+*.log
+
+# Temporary schema files
+tmp_*
+temp_*
+
+# Schema exports
+exports/
+schema_exports/
+
+# IDE files
+.vscode/
+.idea/
