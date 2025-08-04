@@ -16,6 +16,26 @@ exports/
 
 # User uploads (if any)
 uploads/
+uploaded_boundary/
+session_state_files/
+temp_processing/
+
+# Converted files from Tools Add-On
+converted_geojsons/
+converted_csvs/
+geohash_exports/
+
+# Boundary files
+*.geojson
+*.kml
+*.kmz
+*.shp
+*.shx
+*.dbf
+*.prj
+
+# Generated ZIP files
+*.zip
 
 # IDE files
 .vscode/

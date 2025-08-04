@@ -155,6 +155,37 @@ cache/
 temp/
 tmp/
 
+# Uploaded files and temporary processing
+uploads/
+uploaded_files/
+temp_uploads/
+session_uploads/
+
+# Boundary and geospatial files
+*.geojson
+*.kml
+*.kmz
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.sbn
+*.sbx
+
+# Generated files from converters
+converted_*
+output_*
+generated_*
+geohash_*
+boundary_*
+coordinates_*
+
+# ZIP files from downloads
+*.zip
+!requirements.txt
+!README.md
+
 # Docker
 .dockerignore
 
