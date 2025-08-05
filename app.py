@@ -3,7 +3,7 @@ import requests
 
 # Page config
 st.set_page_config(
-    page_title="Karta Tools",
+    page_title="SMOOTH",
     page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -41,6 +41,10 @@ st.markdown("""
         font-weight: 600 !important;
     }
     
+    .stButton > button[kind="primary"] * {
+        color: #FFFFFF !important;
+    }
+    
     .stButton > button[kind="primary"]:hover {
         background-color: #064229 !important;
         border: 1px solid #064229 !important;
@@ -49,9 +53,18 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(8, 90, 62, 0.3) !important;
     }
     
+    .stButton > button[kind="primary"]:hover * {
+        color: #FFFFFF !important;
+    }
+    
     .stButton > button[kind="primary"]:active {
         background-color: #053822 !important;
         border: 1px solid #053822 !important;
+        color: #FFFFFF !important;
+    }
+    
+    .stButton > button[kind="primary"]:active * {
+        color: #FFFFFF !important;
     }
     
     /* Feature card styling */
@@ -126,34 +139,10 @@ def check_api_health():
     except:
         return False
 
-# Hero Section
-st.markdown("""
-    <div class="hero-section">
-        <div class="hero-title">🌍 Karta Tools</div>
-        <div class="hero-subtitle">Geospatial Analysis and Management Platform</div>
-        <p style="color: #888; margin-top: 10px;">
-            Powerful tools for campaign planning, geospatial analysis, and data conversion
-        </p>
-    </div>
-""", unsafe_allow_html=True)
 
-# API Status Check
-api_healthy = check_api_health()
-if api_healthy:
-    st.markdown("""
-        <div class="status-indicator status-healthy">
-            ✅ API Server is Running - All features available
-        </div>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-        <div class="status-indicator status-unhealthy">
-            ❌ API Server is not running - Some features may be limited
-        </div>
-    """, unsafe_allow_html=True)
 
-# Main Navigation Section
-st.markdown("## 🚀 Quick Access")
+st.markdown("<h1 style='text-align: center; color: #000000;'>SMOOTH</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center; color: #666666; font-weight: normal; margin-top: -10px;'>(Smart Mapping Operations Tool Hub)</h3>", unsafe_allow_html=True)
 
 # Create navigation buttons using columns
 col1, col2 = st.columns(2)
@@ -162,34 +151,36 @@ with col1:
     # Campaign Preparation Button
     st.markdown("""
         <div style="margin-bottom: 15px;">
-            <div style="background: linear-gradient(135deg, #085A3E 0%, #0a6b47 100%); 
-                        color: white; border-radius: 12px; padding: 25px; text-align: center;
-                        box-shadow: 0 4px 15px rgba(8, 90, 62, 0.3); margin: 10px 0;">
+            <div style="background: white; 
+                        color: #000000; border-radius: 12px; padding: 25px; text-align: center;
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin: 10px 0;
+                        border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">📋</div>
-                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px;">Campaign Preparation</div>
-                <div style="font-size: 0.9rem; opacity: 0.9;">Complete geospatial workflow, budget forecasting, and campaign planning</div>
+                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">Campaign Preparation</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">Complete geospatial workflow, budget forecasting, and campaign planning</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
     
-    if st.button("🚀 Launch Campaign Preparation", key="nav_campaigns_prep", type="primary", use_container_width=True):
+    if st.button("🚀 Campaign Preparation", key="nav_campaigns_prep", type="primary", use_container_width=True):
         st.switch_page("pages/1_Campaigns_Preparation.py")
 
 with col2:
     # Campaign Evaluation Button
     st.markdown("""
         <div style="margin-bottom: 15px;">
-            <div style="background: linear-gradient(135deg, #085A3E 0%, #0a6b47 100%); 
-                        color: white; border-radius: 12px; padding: 25px; text-align: center;
-                        box-shadow: 0 4px 15px rgba(8, 90, 62, 0.3); margin: 10px 0;">
+            <div style="background: white; 
+                        color: #000000; border-radius: 12px; padding: 25px; text-align: center;
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin: 10px 0;
+                        border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">📊</div>
-                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px;">Campaign Evaluation</div>
-                <div style="font-size: 0.9rem; opacity: 0.9;">Download geohash data, analyze regions, and evaluate campaigns</div>
+                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">Campaign Evaluation</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">Download geohash data, analyze regions, and evaluate campaigns</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
     
-    if st.button("📥 Open Campaign Evaluation", key="nav_campaigns_eval", type="primary", use_container_width=True):
+    if st.button("📥 Campaign Evaluation", key="nav_campaigns_eval", type="primary", use_container_width=True):
         st.switch_page("pages/2_Campaigns_Evaluation.py")
 
 col3, col4 = st.columns(2)
@@ -198,29 +189,31 @@ with col3:
     # Tools Add-On Button
     st.markdown("""
         <div style="margin-bottom: 15px;">
-            <div style="background: linear-gradient(135deg, #085A3E 0%, #0a6b47 100%); 
-                        color: white; border-radius: 12px; padding: 25px; text-align: center;
-                        box-shadow: 0 4px 15px rgba(8, 90, 62, 0.3); margin: 10px 0;">
+            <div style="background: white; 
+                        color: #000000; border-radius: 12px; padding: 25px; text-align: center;
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin: 10px 0;
+                        border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">🛠️</div>
-                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px;">Tools Add-On</div>
-                <div style="font-size: 0.9rem; opacity: 0.9;">File conversion, boundary to geohash, and data format tools</div>
+                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">Tools Add-On</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">File conversion, boundary to geohash, and data format tools</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
     
-    if st.button("🔧 Access Tools Add-On", key="nav_tools_addon", type="primary", use_container_width=True):
+    if st.button("🔧 Tools Add-On", key="nav_tools_addon", type="primary", use_container_width=True):
         st.switch_page("pages/3_Tools_Add_On.py")
 
 with col4:
     # About Us Button
     st.markdown("""
         <div style="margin-bottom: 15px;">
-            <div style="background: linear-gradient(135deg, #085A3E 0%, #0a6b47 100%); 
-                        color: white; border-radius: 12px; padding: 25px; text-align: center;
-                        box-shadow: 0 4px 15px rgba(8, 90, 62, 0.3); margin: 10px 0;">
+            <div style="background: white; 
+                        color: #000000; border-radius: 12px; padding: 25px; text-align: center;
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin: 10px 0;
+                        border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">👥</div>
-                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px;">About Us</div>
-                <div style="font-size: 0.9rem; opacity: 0.9;">Team information, documentation, and project details</div>
+                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">About Us</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">Team information, documentation, and project details</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -228,76 +221,6 @@ with col4:
     if st.button("👋 Meet the Team", key="nav_about_us", type="primary", use_container_width=True):
         st.switch_page("pages/4_About_Us.py")
 
-# Features Overview
-st.markdown("---")
-st.markdown("## 🎯 Key Features")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown("""
-        <div class="feature-card">
-            <div class="feature-title">🗺️ Geospatial Workflow</div>
-            <p>Complete automation from boundary selection to road network analysis with geohash precision.</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown("""
-        <div class="feature-card">
-            <div class="feature-title">💰 Budget Forecasting</div>
-            <p>Accurate cost estimation with multi-currency support and real-time calculations.</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown("""
-        <div class="feature-card">
-            <div class="feature-title">🔄 Data Conversion</div>
-            <p>Seamless conversion between GeoJSON, CSV, KML, and Shapefile formats.</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-# Quick Start Guide
-st.markdown("---")
-st.markdown("## 🚀 Quick Start Guide")
-
-with st.expander("🔍 How to get started", expanded=False):
-    st.markdown("""
-    ### Step 1: Campaign Preparation
-    1. Click on **Campaign Preparation** above
-    2. Select your country and region
-    3. Configure analysis parameters
-    4. Generate your complete campaign plan
-    
-    ### Step 2: Campaign Evaluation  
-    1. Access **Campaign Evaluation** for data downloads
-    2. Select regions for geohash generation
-    3. Download GeoJSON and CSV files
-    
-    ### Step 3: Use Additional Tools
-    1. Visit **Tools Add-On** for file conversions
-    2. Convert between different geospatial formats
-    3. Process boundary files to geohash
-    
-    ### Step 4: Learn More
-    1. Check **About Us** for team information
-    2. Access documentation and resources
-    """)
-
-# System Requirements
-with st.expander("⚙️ System Requirements", expanded=False):
-    st.markdown("""
-    ### API Server Requirements
-    - FastAPI backend running on `localhost:8000`
-    - PostgreSQL database with geospatial extensions
-    - Required API endpoints for geospatial processing
-    
-    ### Browser Compatibility
-    - Modern web browsers (Chrome, Firefox, Safari, Edge)
-    - JavaScript enabled for interactive maps
-    - Stable internet connection for API calls
-    """)
 
 # Footer
 st.markdown(

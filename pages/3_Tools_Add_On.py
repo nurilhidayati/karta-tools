@@ -833,9 +833,6 @@ if st.session_state.boundary_geojson:
     with col2:
         st.info(f"""
         **Precision Level {precision_level}:**
-        - Approximate cell size varies by location
-        - Higher numbers = smaller, more detailed cells
-        - Lower numbers = larger, less detailed cells
         """)
 
 
@@ -974,7 +971,7 @@ st.markdown("---")
 # ============================================================================
 
 st.title("CSV to GeoJSON Converter")
-st.markdown("Upload one or more CSV files containing a `geoHash` column. Each file will be converted to a GeoJSON with polygons.")
+st.markdown("Upload one or more CSV files containing a geoHash column. Each file will be converted to a GeoJSON with polygons.")
 
 uploaded_files = st.file_uploader("📄 Upload CSV files", type="csv", accept_multiple_files=True, key="csv_to_geojson_uploader")
 
