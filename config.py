@@ -21,8 +21,7 @@ class Settings:
     # OpenAI Configuration for Chatbot
     OPENAI_API_KEY: Optional[str] = (
         os.getenv("OPENAI_API_KEY") or 
-        os.getenv("DECLARAI_OPENAI_API_KEY") or
-        "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"
+        os.getenv("DECLARAI_OPENAI_API_KEY")
     )
  
     @property
