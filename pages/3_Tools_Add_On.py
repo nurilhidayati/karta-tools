@@ -742,8 +742,8 @@ st.markdown("<h1 style='text-align: center; color: #000000;'>Tools Add-On</h1>",
 
 
 st.markdown("---")
-st.title("Area to GeoHash Converter")
-st.markdown("Upload a boundary file (GeoJSON, KML, SHP) and convert it to GeoHash with selectable precision levels.")
+st.title("Area to Geohash Converter")
+st.markdown("Upload a area file (GeoJSON, KML, SHP) and convert it to GeoHash with selectable precision levels.")
 
 # Initialize session state for boundary to geohash conversion
 if 'uploaded_boundary' not in st.session_state:
@@ -767,9 +767,9 @@ if not api_available:
 
 # File upload section
 uploaded_boundary_file = st.file_uploader(
-    "📁 Upload Boundary File", 
-    type=["geojson", "json", "kml", "kmz", "shp", "zip"],
-    help="Upload a boundary file in GeoJSON, KML, or Shapefile format"
+    "📁 Upload Area File", 
+    type=["geojson"],
+    help="Upload a area file in GeoJSON format"
 )
 
 if uploaded_boundary_file:
@@ -911,7 +911,7 @@ st.markdown("---")
 # ============================================================================
 
 st.title("Geohash to CSV Converter")
-st.markdown("Upload one or more GeoJSON files. Each file will be converted to a CSV with geometry coordinates.")
+st.markdown("Upload your GeoJSON files containing geohash polygons. Each file will be converted to a CSV with geometry coordinates.")
 
 uploaded_files = st.file_uploader("📄 Upload GeoJSON files", type="geojson", accept_multiple_files=True, key="geojson_to_csv_uploader")
 
@@ -970,8 +970,8 @@ st.markdown("---")
 # CSV TO GEOJSON CONVERTER SECTION
 # ============================================================================
 
-st.title("CSV to GeoJSON Converter")
-st.markdown("Upload one or more CSV files containing a geoHash column. Each file will be converted to a GeoJSON with polygons.")
+st.title("CSV to Geohash Converter")
+st.markdown("Upload CSV files containing a 'geoHash' column. Each file will be converted to a GeoJSON with polygons.")
 
 uploaded_files = st.file_uploader("📄 Upload CSV files", type="csv", accept_multiple_files=True, key="csv_to_geojson_uploader")
 

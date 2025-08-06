@@ -461,64 +461,6 @@ st.markdown("""
         color: #FFFFFF !important;
     }
     
-    /* Download Gap Analysis Result button - Green background */
-    [data-testid="stDownloadButton"] button {
-        background-color: #085A3E !important;
-        color: #FFFFFF !important;
-        border: none !important;
-        border-radius: 6px !important;
-        padding: 12px 24px !important;
-        font-weight: 600 !important;
-        font-size: 16px !important;
-    }
-    
-    [data-testid="stDownloadButton"] button:hover {
-        background-color: #06412F !important;
-        color: #FFFFFF !important;
-    }
-    
-    .stDownloadButton button {
-        background-color: #085A3E !important;
-        color: #FFFFFF !important;
-        border: none !important;
-        border-radius: 6px !important;
-        padding: 12px 24px !important;
-        font-weight: 600 !important;
-        font-size: 16px !important;
-    }
-    
-    .stDownloadButton button:hover {
-        background-color: #06412F !important;
-        color: #FFFFFF !important;
-    }
-    
-    /* Start New Analysis button - Green background (alternative selectors) */
-    .stButton button {
-        background-color: #085A3E !important;
-        color: #FFFFFF !important;
-        border: none !important;
-        border-radius: 6px !important;
-        padding: 12px 24px !important;
-        font-weight: 600 !important;
-        font-size: 16px !important;
-    }
-    
-    .stButton button:hover {
-        background-color: #06412F !important;
-        color: #FFFFFF !important;
-    }
-    
-    /* Override for secondary buttons (like the disabled ones during processing) */
-    .stButton button[kind="secondary"] {
-        background-color: #6c757d !important;
-        color: #FFFFFF !important;
-    }
-    
-    .stButton button[kind="secondary"]:hover {
-        background-color: #5a6268 !important;
-        color: #FFFFFF !important;
-    }
-    
     /* Universal override for button elements */
     *[role="button"], *[role="button"] * {
         color: #FFFFFF !important;
@@ -1018,9 +960,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
- # Navigation header
-st.markdown("<h1 style='text-align: center; color: #000000;'>Campaign Evaluation</h1>", unsafe_allow_html=True)
-    
+
 
 # API Configuration
 API_BASE_URL = "http://localhost:8000/api/v1"
@@ -1068,7 +1008,7 @@ def get_campaign_details(campaign_id):
 
 
 # Campaign Selection Section
-st.header("Select Campaign")
+st.subheader("📋 Campaign Selection")
 
 # Initialize session state for campaign selection
 if "selected_campaign_id" not in st.session_state:
@@ -1081,7 +1021,7 @@ campaigns = get_campaign_names()
 
 if campaigns:
     # Create dropdown for campaign selection
-    campaign_options = ["-- Select Campaign --"] + [f"{campaign['campaign_name']}" for campaign in campaigns]
+    campaign_options = ["Select a campaign..."] + [f"{campaign['campaign_name']}" for campaign in campaigns]
     campaign_names_only = [campaign['campaign_name'] for campaign in campaigns]
     
     selected_campaign_name = st.selectbox(
@@ -1092,7 +1032,7 @@ if campaigns:
     )
     
     # If a campaign is selected (not the default option)
-    if selected_campaign_name != "-- Select Campaign --" and selected_campaign_name in campaign_names_only:
+    if selected_campaign_name != "Select a campaign..." and selected_campaign_name in campaign_names_only:
         # Find the selected campaign ID
         selected_campaign = next((camp for camp in campaigns if camp['campaign_name'] == selected_campaign_name), None)
         
@@ -1101,8 +1041,26 @@ if campaigns:
             # Fetch campaign details
             st.session_state.campaign_details = get_campaign_details(selected_campaign['id'])
         
-        
-    elif selected_campaign_name != "-- Select Campaign --":
+        # Display campaign details if available
+        if st.session_state.campaign_details:
+            campaign = st.session_state.campaign_details
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.info(f"**📝 Campaign Name:**\n{campaign.get('campaign_name', 'N/A')}")
+            
+            with col2:
+                st.info(f"**📊 UKM Plan:**\n{campaign.get('ukm_plan', 'N/A')}")
+            
+            with col3:
+                st.info(f"**✅ UKM Actual:**\n{campaign.get('ukm_actual', 'N/A')}")
+            
+           
+        else:
+            st.error("❌ Failed to load campaign details. Please try selecting again.")
+    
+    elif selected_campaign_name != "Select a campaign...":
         st.warning("⚠️ Please select a valid campaign from the dropdown.")
 
 else:
@@ -1111,7 +1069,7 @@ else:
 
 
 
-st.header("Upload Supporting Data")
+st.header("Data Upload")
 # Initialize session state variables
 session_vars = [
     "flattened_data", "road_gdf", "restricted_areas_gdf", 
@@ -1124,9 +1082,6 @@ for var in session_vars:
 
 if "analysis_completed" not in st.session_state:
     st.session_state.analysis_completed = False
-
-if "is_processing_analysis" not in st.session_state:
-    st.session_state.is_processing_analysis = False
 
 # Helper functions
 def generate_geohash(lat, lon, precision=5):
@@ -1759,92 +1714,62 @@ def generate_ai_recommendations(analysis_results):
     
 
 # File upload
-uploaded_file = st.file_uploader("📂 Upload a CSV report from DAX listing roads that couldn't be collected.", type=["csv"])
+uploaded_file = st.file_uploader("📂 Upload CSV file with road_coordinates", type=["csv"])
 
 # Fixed configuration values
 distance_buffer = 100  # Fixed buffer distance in meters
 
-
-
-# Check conditions for enabling the button
-campaign_selected = (st.session_state.selected_campaign_id is not None and 
-                    st.session_state.campaign_details is not None)
-file_uploaded = uploaded_file is not None
-is_processing = st.session_state.get('is_processing_analysis', False)
-
-# Show button with appropriate state
-if is_processing:
-    st.button('🔄 Processing Analysis...', type='secondary', disabled=True, use_container_width=True)
-    analysis_clicked = False
-elif not campaign_selected and not file_uploaded:
-    st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-    st.warning('⚠️ Please select a campaign and upload a CSV file to enable gap analysis.')
-    analysis_clicked = False
-elif not campaign_selected:
-    st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-    st.info('ℹ️ Please select a campaign first.')
-    analysis_clicked = False
-elif not file_uploaded:
-    st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-    st.info('ℹ️ Please upload a CSV file with road coordinates.')
-    analysis_clicked = False
-else:
-    analysis_clicked = st.button('UKM Gap Analysis', type='primary', use_container_width=True)
-
-# Main processing logic
-if analysis_clicked and campaign_selected and file_uploaded:
-    st.session_state.analysis_completed = False
-    st.session_state.is_processing_analysis = True
-    
-    # Progress container
-    progress_container = st.container()
-    status_container = st.container()
-    
-    with progress_container:
-        progress_bar = st.progress(0)
-        current_status = st.empty()
-    
-    try:
-        # Step 1: Flatten Coordinates
-        current_status.info("🔄 Step 1/4: Flattening coordinates...")
-        progress_bar.progress(0.1)
+# Main processing button
+if uploaded_file is not None:
+    if st.button("🚀 **Run Complete Gap Analysis**", type="primary"):
+        st.session_state.analysis_completed = False
         
-        st.session_state.flattened_data = flatten_coordinates_from_file(uploaded_file)
+        # Progress container
+        progress_container = st.container()
+        status_container = st.container()
         
-        if st.session_state.flattened_data is None or len(st.session_state.flattened_data) == 0:
-            st.error("❌ No valid coordinate data found in the uploaded file!")
-            st.session_state.is_processing_analysis = False
-            st.stop()
+        with progress_container:
+            progress_bar = st.progress(0)
+            current_status = st.empty()
         
-        flattened_count = len(st.session_state.flattened_data)
-        current_status.success(f"✅ Step 1 Complete: Flattened {flattened_count} coordinate points")
-        progress_bar.progress(0.25)
-        
-        # Step 2: Convert to GeoJSON
-        current_status.info("🗺️ Step 2/4: Converting to GeoJSON LineStrings...")
-        
-        st.session_state.road_gdf = convert_csv_to_geojson(st.session_state.flattened_data)
-        
-        if st.session_state.road_gdf is None or len(st.session_state.road_gdf) == 0:
-            st.error("❌ Could not create valid GeoJSON LineStrings from coordinate data!")
-            st.session_state.is_processing_analysis = False
-            st.stop()
-        
-        roads_count = len(st.session_state.road_gdf)
-        current_status.success(f"✅ Step 2 Complete: Created {roads_count} road LineStrings")
-        progress_bar.progress(0.5)
-        
-        # Step 3: Geohash-based Area Detection & Download Restrictions
-        current_status.info("🌍 Step 3/4: Auto-detecting area and downloading restrictions...")
-        
-        # Extract coordinates and create analysis polygon
-        coords_data = list(zip(st.session_state.flattened_data['x'], st.session_state.flattened_data['y']))
-        analysis_polygon = create_polygon_from_coords(coords_data)
-        
-        if analysis_polygon is None:
-            st.error("❌ Could not create analysis polygon from coordinate data!")
-            st.session_state.is_processing_analysis = False
-            st.stop()
+        try:
+            # Step 1: Flatten Coordinates
+            current_status.info("🔄 Step 1/4: Flattening coordinates...")
+            progress_bar.progress(0.1)
+            
+            st.session_state.flattened_data = flatten_coordinates_from_file(uploaded_file)
+            
+            if st.session_state.flattened_data is None or len(st.session_state.flattened_data) == 0:
+                st.error("❌ No valid coordinate data found in the uploaded file!")
+                st.stop()
+            
+            flattened_count = len(st.session_state.flattened_data)
+            current_status.success(f"✅ Step 1 Complete: Flattened {flattened_count} coordinate points")
+            progress_bar.progress(0.25)
+            
+            # Step 2: Convert to GeoJSON
+            current_status.info("🗺️ Step 2/4: Converting to GeoJSON LineStrings...")
+            
+            st.session_state.road_gdf = convert_csv_to_geojson(st.session_state.flattened_data)
+            
+            if st.session_state.road_gdf is None or len(st.session_state.road_gdf) == 0:
+                st.error("❌ Could not create valid GeoJSON LineStrings from coordinate data!")
+                st.stop()
+            
+            roads_count = len(st.session_state.road_gdf)
+            current_status.success(f"✅ Step 2 Complete: Created {roads_count} road LineStrings")
+            progress_bar.progress(0.5)
+            
+            # Step 3: Geohash-based Area Detection & Download Restrictions
+            current_status.info("🌍 Step 3/4: Auto-detecting area and downloading restrictions...")
+            
+            # Extract coordinates and create analysis polygon
+            coords_data = list(zip(st.session_state.flattened_data['x'], st.session_state.flattened_data['y']))
+            analysis_polygon = create_polygon_from_coords(coords_data)
+            
+            if analysis_polygon is None:
+                st.error("❌ Could not create analysis polygon from coordinate data!")
+                st.stop()
             
             # Generate geohashes for the area
             unique_geohashes = set()
@@ -1892,27 +1817,25 @@ if analysis_clicked and campaign_selected and file_uploaded:
                 st.session_state.restricted_roads_gdf
             )
             
+            current_status.success("✅ AI Analysis Complete: Intelligent insights generated")
             progress_bar.progress(1.0)
             
             st.session_state.analysis_completed = True
-        st.session_state.is_processing_analysis = False
-        
-        # Clear progress indicators
-        progress_container.empty()
-        
-    except Exception as e:
-        st.error(f"❌ Error during analysis: {e}")
-        st.write("Error details:", str(e))
-        st.session_state.is_processing_analysis = False
-        progress_container.empty()
+            
+            # Clear progress indicators
+            progress_container.empty()
+            
+        except Exception as e:
+            st.error(f"❌ Error during analysis: {e}")
+            st.write("Error details:", str(e))
+            progress_container.empty()
 
 # Display results if analysis completed
 if st.session_state.analysis_completed and st.session_state.final_analysis_result is not None:
     st.success("🎉 **Gap Analysis Completed Successfully!**")
     
-    
     # Analysis Summary
-    st.header("📊 Analysis Summary")
+    st.subheader("📊 Analysis Summary")
     
     # Calculate total length of intersecting roads in kilometers
     intersecting_road_length_km = 0
@@ -1930,42 +1853,21 @@ if st.session_state.analysis_completed and st.session_state.final_analysis_resul
         except:
             total_road_length_km = 0
     
-
-    # AI Analysis Results Section
-    if st.session_state.ai_analysis_result is not None:
+    # First row of metrics
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("🛣️ Total Gap Length", 
+                 f"{total_road_length_km:.2f} km")
+    with col2:
+        # Calculate intersection percentage
+        intersection_percentage = 0
+        if total_road_length_km > 0:
+            intersection_percentage = (intersecting_road_length_km / total_road_length_km) * 100
         
-        ai_data = st.session_state.ai_analysis_result
+        st.metric("📏 Validated Gap Length", 
+                 f"{intersecting_road_length_km:.2f} km",
+                 delta=f"{intersection_percentage:.1f}% of total")
         
-        # Severity Analysis - Most Important First
-        if 'severity_analysis' in ai_data and ai_data['severity_analysis']:
-            severity = ai_data['severity_analysis']
-            if st.session_state.campaign_details:
-                campaign = st.session_state.campaign_details
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("📊 UKM Plan", campaign.get('ukm_plan', 'N/A'))
-                    st.metric("✅ UKM Actual", campaign.get('ukm_actual', 'N/A'))
-
-                with col2:
-                    st.metric("🛣️ Total Gap UKM", 
-                             f"{total_road_length_km:.2f} km")
-
-                    # Calculate intersection percentage
-                    intersection_percentage = 0
-                    if total_road_length_km > 0:
-                        intersection_percentage = (intersecting_road_length_km / total_road_length_km) * 100
-                    
-                    st.metric("📏 Validated Gap UKM", 
-                             f"{intersecting_road_length_km:.2f} km",
-                             )
-
-                with col3:
-                    if severity.get('severity_breakdown'):
-                        st.write("**Risk Factors:**")
-                        for factor, count in list(severity['severity_breakdown'].items())[:3]:
-                            st.write(f"• {factor.title()}")
-            
     
     # Download Results
     if len(st.session_state.final_analysis_result) > 0:
@@ -1983,18 +1885,154 @@ if st.session_state.analysis_completed and st.session_state.final_analysis_resul
             buffer,
             file_name=final_filename,
             mime="application/geo+json",
-            help="Download the intersecting roads as GeoJSON file",
-            type="primary"
+            help="Download the intersecting roads as GeoJSON file"
         )
     else:
         st.info("ℹ️ No intersecting roads found in the analysis area.")
+    
+    # AI Analysis Results Section
+    if st.session_state.ai_analysis_result is not None:
+        st.divider()
+        st.header("🤖 AI-Powered OSM Feature Analysis")
+        
+        ai_data = st.session_state.ai_analysis_result
+        
+        # Severity Analysis - Most Important First
+        if 'severity_analysis' in ai_data and ai_data['severity_analysis']:
+            severity = ai_data['severity_analysis']
+            st.subheader(f"{severity.get('severity_color', '🔵')} Impact Severity Analysis")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Severity Level", severity.get('severity_level', 'UNKNOWN'))
+                st.metric("Severity Score", f"{severity.get('severity_score', 0):.1f}/100")
+            with col2:
+                st.metric("Intersection Density", severity.get('intersection_density', 0))
+                st.metric("Total Risk Score", severity.get('total_raw_score', 0))
+            with col3:
+                if severity.get('severity_breakdown'):
+                    st.write("**Risk Factors:**")
+                    for factor, count in list(severity['severity_breakdown'].items())[:3]:
+                        st.write(f"• {factor.title()}: {count}")
+        
+        # AI Recommendations - Critical Information
+        if 'recommendations' in ai_data and ai_data['recommendations']:
+            st.subheader("💡 AI-Generated Recommendations")
+            
+            for i, rec in enumerate(ai_data['recommendations']):
+                priority = rec.get('priority', 'LOW')
+                rec_type = rec.get('type', 'GENERAL')
+                message = rec.get('message', 'No message')
+                
+                # Color code by priority
+                if priority == 'CRITICAL':
+                    st.error(f"**{rec_type}**: {message}")
+                elif priority == 'HIGH':
+                    st.warning(f"**{rec_type}**: {message}")
+                else:
+                    st.info(f"**{rec_type}**: {message}")
+        
+        # Detailed Analysis in Expandable Sections
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Restricted Areas Analysis
+            if 'area_types' in ai_data and ai_data['area_types']:
+                area_data = ai_data['area_types']
+                with st.expander(f"🏢 Restricted Areas Analysis ({area_data.get('total_features', 0)} areas)", expanded=False):
+                    
+                    if area_data.get('categories'):
+                        st.write("**Area Categories:**")
+                        for category, count in area_data['categories'].items():
+                            percentage = (count / area_data['total_features']) * 100 if area_data['total_features'] > 0 else 0
+                            st.write(f"• **{category}**: {count} areas ({percentage:.1f}%)")
+                    
+                    if area_data.get('total_area_sqm', 0) > 0:
+                        total_area_km2 = area_data['total_area_sqm'] / 1000000
+                        st.metric("Total Restricted Area", f"{total_area_km2:.2f} km²")
+                    
+                    if area_data.get('most_common'):
+                        st.write("**Top 3 Area Types:**")
+                        for i, (category, count) in enumerate(area_data['most_common'], 1):
+                            st.write(f"{i}. {category}: {count} areas")
+            
+            # Geographic Patterns Analysis
+            if 'geographic_patterns' in ai_data and ai_data['geographic_patterns']:
+                geo_data = ai_data['geographic_patterns']
+                with st.expander("📍 Geographic Pattern Analysis", expanded=False):
+                    
+                    if 'center_coordinates' in geo_data:
+                        center = geo_data['center_coordinates']
+                        st.write(f"**Analysis Center:** {center['lat']:.4f}, {center['lon']:.4f}")
+                    
+                    if 'coverage_area_km2' in geo_data:
+                        st.metric("Coverage Area", f"{geo_data['coverage_area_km2']:.1f} km²")
+                    
+                    if 'hotspot_analysis' in geo_data:
+                        hotspots = geo_data['hotspot_analysis']
+                        st.write("**Density Hotspots:**")
+                        st.write(f"• Hotspot Count: {hotspots.get('hotspot_count', 0)}")
+                        st.write(f"• Max Density: {hotspots.get('max_density', 0)} intersections/cell")
+                        st.write(f"• Avg Density: {hotspots.get('avg_density', 0):.1f} intersections/cell")
+        
+        with col2:
+            # Restricted Roads Analysis
+            if 'road_restrictions' in ai_data and ai_data['road_restrictions']:
+                road_data = ai_data['road_restrictions']
+                with st.expander(f"🛣️ Restricted Roads Analysis ({road_data.get('total_roads', 0)} roads)", expanded=False):
+                    
+                    if road_data.get('categories'):
+                        st.write("**Road Restriction Categories:**")
+                        for category, count in road_data['categories'].items():
+                            percentage = (count / road_data['total_roads']) * 100 if road_data['total_roads'] > 0 else 0
+                            st.write(f"• **{category}**: {count} roads ({percentage:.1f}%)")
+                    
+                    if road_data.get('total_length_km', 0) > 0:
+                        st.metric("Total Restricted Length", f"{road_data['total_length_km']:.2f} km")
+                    
+                    if road_data.get('most_common'):
+                        st.write("**Top 3 Road Restriction Types:**")
+                        for i, (category, count) in enumerate(road_data['most_common'], 1):
+                            st.write(f"{i}. {category}: {count} roads")
+            
+            # Feature Details Viewer
+            with st.expander("🔍 Detailed Feature Explorer", expanded=False):
+                
+                analysis_type = st.selectbox("Select Analysis Type:", 
+                                           ["Restricted Areas", "Restricted Roads"])
+                
+                if analysis_type == "Restricted Areas" and 'area_types' in ai_data:
+                    area_details = ai_data['area_types'].get('details', {})
+                    if area_details:
+                        selected_category = st.selectbox("Select Area Category:", 
+                                                       list(area_details.keys()))
+                        if selected_category and area_details[selected_category]:
+                            features = area_details[selected_category][:5]  # Show first 5
+                            for i, feature in enumerate(features, 1):
+                                st.write(f"**Feature {i}:**")
+                                st.write(f"• Type: {feature.get('primary_tag', 'Unknown')}")
+                                if feature.get('area_sqm', 0) > 0:
+                                    st.write(f"• Area: {feature['area_sqm']/10000:.2f} hectares")
+                                st.write("---")
+                
+                elif analysis_type == "Restricted Roads" and 'road_restrictions' in ai_data:
+                    road_details = ai_data['road_restrictions'].get('details', {})
+                    if road_details:
+                        selected_category = st.selectbox("Select Road Category:", 
+                                                       list(road_details.keys()))
+                        if selected_category and road_details[selected_category]:
+                            roads = road_details[selected_category][:5]  # Show first 5
+                            for i, road in enumerate(roads, 1):
+                                st.write(f"**Road {i}:**")
+                                st.write(f"• Type: {road.get('primary_tag', 'Unknown')}")
+                                if road.get('length_km', 0) > 0:
+                                    st.write(f"• Length: {road['length_km']:.2f} km")
+                                st.write("---")
 
 # Reset button
 if st.session_state.analysis_completed:
-    if st.button("🔄 Start New Analysis", type="primary"):
+    if st.button("🔄 Start New Analysis"):
         for var in session_vars:
             st.session_state[var] = None
         st.session_state.analysis_completed = False
-        st.session_state.is_processing_analysis = False
         st.rerun()
-   

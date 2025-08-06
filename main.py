@@ -9,6 +9,7 @@ from api.routers import country
 from api.routers import geospatial
 from api.routers import boundary
 from api.routers import chatbot
+from api.routers import campaign
 from config import Settings
 
 # Initialize settings
@@ -53,6 +54,7 @@ app.include_router(country.router, prefix="/api/v1")
 app.include_router(geospatial.router, prefix="/api/v1")
 app.include_router(boundary.router, prefix="/api/v1")
 app.include_router(chatbot.router, prefix="/api/v1")
+app.include_router(campaign.router, prefix="/api/v1")
 
 # Root endpoint
 @app.get("/", tags=["root"])
