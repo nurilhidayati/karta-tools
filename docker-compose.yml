@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database with PostGIS extension
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: karta-postgres
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-postgres}
+      POSTGRES_USER: ${DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-Nuril123!}
+    ports:
+      - "${DATABASE_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - karta-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres} -d ${DATABASE_NAME:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend Service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: karta-api
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=${DATABASE_NAME:-postgres}
+      - DATABASE_USER=${DATABASE_USER:-postgres}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-Nuril123!}
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DEBUG=${DEBUG:-true}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./cache:/app/cache
+      - .:/app
+    networks:
+      - karta-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Streamlit Frontend Service
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: karta-streamlit
+    environment:
+      - API_URL=http://api:8000
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    volumes:
+      - ./cache:/app/cache
+      - .:/app
+    networks:
+      - karta-network
+    depends_on:
+      - api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  karta-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

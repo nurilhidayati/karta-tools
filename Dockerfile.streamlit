@@ -1,0 +1,44 @@
+# Use Python 3.11 slim image as base
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies for geospatial libraries
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gdal-bin \
+    libgdal-dev \
+    libpq-dev \
+    libproj-dev \
+    libgeos-dev \
+    python3-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables for GDAL
+ENV GDAL_CONFIG=/usr/bin/gdal-config
+ENV CPLUS_INCLUDE_PATH=/usr/include/gdal
+ENV C_INCLUDE_PATH=/usr/include/gdal
+
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the entire application
+COPY . .
+
+# Create cache directory
+RUN mkdir -p cache
+
+# Expose the port Streamlit runs on
+EXPOSE 8501
+
+# Health check for Streamlit
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+
+# Command to run Streamlit
+CMD ["streamlit", "run", "Home.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true", "--server.fileWatcherType=none"]
