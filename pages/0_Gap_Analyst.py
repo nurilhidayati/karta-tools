@@ -13,8 +13,387 @@ from collections import Counter, defaultdict
 from io import StringIO
 from shapely.geometry import LineString, shape, box
 
-st.set_page_config(page_title="Gap Analyst Workflow", layout="wide")
-st.title("🔍 Gap Analyst - Complete Workflow")
+st.set_page_config(page_title="Campaign Evaluation", layout="wide")
+
+# Custom CSS for navbar, sidebar, and main background colors
+st.markdown("""
+<style>
+    /* Navbar background color - Multiple selectors for compatibility */
+    .stApp > header {
+        background-color: #F3F6FB !important;
+    }
+    
+    header[data-testid="stHeader"] {
+        background-color: #F3F6FB !important;
+    }
+    
+    .css-18ni7ap {
+        background-color: #F3F6FB !important;
+    }
+    
+    .css-vk3wp9 {
+        background-color: #F3F6FB !important;
+    }
+    
+    .stApp header {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* Main content background color */
+    .stApp {
+        background-color: #F3F6FB !important;
+    }
+    
+    .main .block-container {
+        background-color: #F3F6FB !important;
+    }
+    
+    section[data-testid="stMain"] {
+        background-color: #F3F6FB !important;
+    }
+    
+    .css-1lcbmhc {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* Sidebar background color */
+    .css-1d391kg {
+        background-color: white !important;
+    }
+    
+    .css-1cypcdb {
+        background-color: white !important;
+    }
+    
+    /* Additional sidebar selectors for different Streamlit versions */
+    section[data-testid="stSidebar"] > div {
+        background-color: white !important;
+    }
+    
+    .css-k1vhr4 {
+        background-color: white !important;
+    }
+    
+    /* Ensure sidebar text is visible on white background */
+    .css-1d391kg .css-17eq0hr {
+        color: #262730 !important;
+    }
+    
+    /* Change all text color to black */
+    .stApp {
+        color: black !important;
+    }
+    
+    .stApp .main {
+        color: black !important;
+    }
+    
+    /* Ensure all text elements are black */
+    .stApp p, .stApp div, .stApp span, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+        color: black !important;
+    }
+    
+    /* Streamlit specific text elements */
+    .css-1629p8f, .css-1cpxqw2, .css-1v0mbdj, .css-1evcfpn {
+        color: black !important;
+    }
+    
+    /* Markdown text */
+    .stMarkdown {
+        color: black !important;
+    }
+    
+    /* Text input labels */
+    .stTextInput label {
+        color: black !important;
+    }
+    
+    /* Metric labels and values */
+    .css-1wivap2, .css-1xarl3l {
+        color: black !important;
+    }
+    
+    /* Default button text - Force white color */
+    .stButton button {
+        color: #FFFFFF !important;
+    }
+    
+    /* Force all button text to be white - Multiple selectors */
+    .stButton button * {
+        color: #FFFFFF !important;
+    }
+    
+    .stButton > button {
+        color: #FFFFFF !important;
+    }
+    
+    .stButton > button * {
+        color: #FFFFFF !important;
+    }
+    
+    button {
+        color: #FFFFFF !important;
+    }
+    
+    button * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Force button text in all states */
+    .stButton button:hover, .stButton button:focus, .stButton button:active {
+        color: #FFFFFF !important;
+    }
+    
+    .stButton button:hover *, .stButton button:focus *, .stButton button:active * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Run Complete Gap Analysis button - specific styling */
+    .stButton > button[kind="primary"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 12px 24px !important;
+        font-weight: 600 !important;
+        font-size: 16px !important;
+    }
+    
+    .stButton > button[kind="primary"]:hover {
+        background-color: #06412F !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Alternative selector for primary button */
+    button[data-testid="baseButton-primary"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: none !important;
+    }
+    
+    button[data-testid="baseButton-primary"]:hover {
+        background-color: #06412F !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Additional selectors for primary button */
+    .css-1cpxqw2[data-testid="baseButton-primary"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+    }
+    
+    .stButton button[type="submit"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* CSS class based selector for primary button */
+    .css-1r6slb0 {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+    }
+    
+    .css-1r6slb0:hover {
+        background-color: #06412F !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Keep sidebar text readable on white background */
+    section[data-testid="stSidebar"] {
+        color: black !important;
+    }
+    
+    /* Alert messages - keep their default colors for visibility */
+    .stAlert .css-1cpxqw2 {
+        color: inherit !important;
+    }
+    
+    /* Success messages */
+    .stSuccess {
+        color: #155724 !important;
+    }
+    
+    /* Error messages */
+    .stError {
+        color: #721c24 !important;
+    }
+    
+    /* Warning messages */
+    .stWarning {
+        color: #856404 !important;
+    }
+    
+    /* Info messages */
+    .stInfo {
+        color: #004085 !important;
+    }
+    
+    /* File uploader container - force white background */
+    .stFileUploader {
+        background-color: white !important;
+        border-radius: 8px !important;
+        padding: 10px !important;
+        border: 1px solid #ddd !important;
+    }
+    
+    /* File uploader text - force black */
+    .stFileUploader label {
+        color: black !important;
+    }
+    
+    .stFileUploader .css-1cpxqw2 {
+        color: black !important;
+    }
+    
+    .stFileUploader div {
+        color: black !important;
+    }
+    
+    /* Upload button styling */
+    .stFileUploader button {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 4px !important;
+        padding: 8px 16px !important;
+        font-weight: 500 !important;
+    }
+    
+    .stFileUploader button:hover {
+        background-color: #06412F !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Upload area drag and drop - force white background */
+    .stFileUploader > div > div {
+        background-color: white !important;
+        color: black !important;
+    }
+    
+    /* Drag and drop zone specific */
+    .stFileUploader [data-testid="stFileUploadDropzone"] {
+        background-color: white !important;
+        border: 2px dashed #cccccc !important;
+        color: black !important;
+    }
+    
+    .stFileUploader [data-testid="stFileUploadDropzone"] div {
+        background-color: white !important;
+        color: black !important;
+    }
+    
+    /* File uploader inner area */
+    .css-1v8vjqx {
+        background-color: white !important;
+        color: black !important;
+    }
+    
+    .css-1v8vjqx .css-1cpxqw2 {
+        color: black !important;
+    }
+    
+    /* Upload area text */
+    .stFileUploader .css-1v8vjqx {
+        color: black !important;
+        background-color: white !important;
+    }
+    
+    /* Additional specific selectors for upload area */
+    .stFileUploader section {
+        background-color: white !important;
+    }
+    
+    .stFileUploader section div {
+        background-color: white !important;
+        color: black !important;
+    }
+    
+    /* Upload zone text elements */
+    .stFileUploader section p {
+        color: black !important;
+    }
+    
+    .stFileUploader section small {
+        color: #666666 !important;
+    }
+    
+    /* AGGRESSIVE BUTTON TEXT FORCING - Override everything */
+    button[data-testid*="button"] {
+        color: #FFFFFF !important;
+    }
+    
+    button[data-testid*="button"] * {
+        color: #FFFFFF !important;
+    }
+    
+    button[data-testid*="baseButton"] {
+        color: #FFFFFF !important;
+    }
+    
+    button[data-testid*="baseButton"] * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Target all Streamlit button variations */
+    .stButton, .stButton *, 
+    .stDownloadButton, .stDownloadButton *,
+    .stFormSubmitButton, .stFormSubmitButton * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Target button content specifically */
+    .stButton button span,
+    .stButton button div,
+    .stButton button p {
+        color: #FFFFFF !important;
+    }
+    
+    /* Force all primary buttons */
+    button[kind="primary"],
+    button[kind="primary"] *,
+    button[type="primary"],
+    button[type="primary"] * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Override any inherited text colors in buttons */
+    .stApp button,
+    .stApp button *,
+    .stApp .stButton,
+    .stApp .stButton * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Nuclear option - Force white on all button-related CSS classes */
+    .css-1cpxqw2,
+    .css-1r6slb0,
+    .css-k1vhr4 button,
+    .css-1evcfpn button,
+    .css-1v0mbdj button {
+        color: #FFFFFF !important;
+    }
+    
+    /* Target button text by element type within buttons */
+    button span, button div, button p, button a, button label {
+        color: #FFFFFF !important;
+    }
+    
+    /* Make sure download buttons are white too */
+    [data-testid="stDownloadButton"] button,
+    [data-testid="stDownloadButton"] button *,
+    .stDownloadButton button,
+    .stDownloadButton button * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Universal override for button elements */
+    *[role="button"], *[role="button"] * {
+        color: #FFFFFF !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("Campaign Evaluation")
 
 # Initialize session state variables
 session_vars = [
@@ -301,7 +680,7 @@ def analyze_osm_features_with_ai(intersecting_roads_gdf, restricted_areas_gdf, r
             # Generate AI recommendations
             recommendations = generate_ai_recommendations(analysis_results)
             analysis_results['recommendations'] = recommendations
-    
+
     except Exception as e:
         st.warning(f"AI analysis encountered an issue: {e}")
         # Return basic results even if AI analysis fails
@@ -705,18 +1084,12 @@ def generate_ai_recommendations(analysis_results):
     
     return recommendations
 
-# Single Workflow Interface
-st.header("🔍 Gap Analyst - One-Click Complete Analysis")
 
 # File upload
 uploaded_file = st.file_uploader("📂 Upload CSV file with road_coordinates", type=["csv"])
 
-# Configuration options
-col1, col2 = st.columns(2)
-with col1:
-    distance_buffer = st.slider("🎯 Buffer Distance (meters)", min_value=50, max_value=500, value=100, step=50)
-with col2:
-    output_filename = st.text_input("📝 Output filename", value="gap_analysis_result")
+# Fixed configuration values
+distance_buffer = 100  # Fixed buffer distance in meters
 
 # Main processing button
 if uploaded_file is not None:
@@ -855,74 +1228,40 @@ if st.session_state.analysis_completed and st.session_state.final_analysis_resul
     # First row of metrics
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("📍 Coordinate Points", 
-                 len(st.session_state.flattened_data) if st.session_state.flattened_data is not None else 0)
-        st.metric("🛣️ Total Roads Length", 
+        st.metric("🛣️ Total Gap Length", 
                  f"{total_road_length_km:.2f} km")
     with col2:
-        st.metric("🛣️ Road LineStrings", 
-                 len(st.session_state.road_gdf) if st.session_state.road_gdf is not None else 0)
-        st.metric("⚠️ Intersecting Roads", 
-                 len(st.session_state.final_analysis_result) if st.session_state.final_analysis_result is not None else 0)
-    with col3:
-        st.metric("🏢 Restricted Areas", 
-                 len(st.session_state.restricted_areas_gdf) if st.session_state.restricted_areas_gdf is not None else 0)
-        
         # Calculate intersection percentage
         intersection_percentage = 0
         if total_road_length_km > 0:
             intersection_percentage = (intersecting_road_length_km / total_road_length_km) * 100
         
-        st.metric("📏 Intersecting Length", 
+        st.metric("📏 Validated Gap Length", 
                  f"{intersecting_road_length_km:.2f} km",
                  delta=f"{intersection_percentage:.1f}% of total")
-    
-    # Area Information
-    if st.session_state.flattened_data is not None and len(st.session_state.flattened_data) > 0:
-        st.subheader("🌍 Analysis Area Details")
         
-        unique_grid_ids = st.session_state.flattened_data['grid_id'].unique()
-        grid_ids_list = [grid_id for grid_id in unique_grid_ids if grid_id and str(grid_id).strip()]
+    with col3:
+        st.metric("🏢 Restricted Areas", 
+                 len(st.session_state.restricted_areas_gdf) if st.session_state.restricted_areas_gdf is not None else 0)
         
-        min_lat = st.session_state.flattened_data['y'].min()
-        max_lat = st.session_state.flattened_data['y'].max()
-        min_lon = st.session_state.flattened_data['x'].min()
-        max_lon = st.session_state.flattened_data['x'].max()
-        
-        center_lat = (min_lat + max_lat) / 2
-        center_lon = (min_lon + max_lon) / 2
-        center_geohash = generate_geohash(center_lat, center_lon, precision=6)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**📍 Grid IDs:** {len(grid_ids_list)} unique IDs")
-            st.write(f"**🗺️ Center Geohash:** {center_geohash}")
-            st.write(f"**📐 Latitude Range:** {min_lat:.4f} to {max_lat:.4f}")
-        with col2:
-            st.write(f"**🎯 Buffer Distance:** {distance_buffer}m")
-            st.write(f"**📏 Area Coverage:** {(max_lat-min_lat)*111:.1f}km × {(max_lon-min_lon)*111:.1f}km")
-            st.write(f"**📐 Longitude Range:** {min_lon:.4f} to {max_lon:.4f}")
-    
     # Download Results
     if len(st.session_state.final_analysis_result) > 0:
         st.subheader("⬇️ Download Results")
         
-        if output_filename.strip():
-            final_filename = output_filename.strip()
-            if not final_filename.lower().endswith(".geojson"):
-                final_filename += ".geojson"
-            
-            buffer = io.BytesIO()
-            st.session_state.final_analysis_result.to_file(buffer, driver="GeoJSON")
-            buffer.seek(0)
-            
-            st.download_button(
-                "🎯 Download Gap Analysis Result",
-                buffer,
-                file_name=final_filename,
-                mime="application/geo+json",
-                help="Download the intersecting roads as GeoJSON file"
-            )
+        # Use fixed default filename
+        final_filename = "gap_analysis_result.geojson"
+
+        buffer = io.BytesIO()
+        st.session_state.final_analysis_result.to_file(buffer, driver="GeoJSON")
+        buffer.seek(0)
+
+        st.download_button(
+            "🎯 Download Gap Analysis Result",
+            buffer,
+            file_name=final_filename,
+            mime="application/geo+json",
+            help="Download the intersecting roads as GeoJSON file"
+        )
     else:
         st.info("ℹ️ No intersecting roads found in the analysis area.")
     

@@ -157,7 +157,7 @@ with col1:
                         border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">📋</div>
                 <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">Campaign Preparation</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">Complete geospatial workflow, budget forecasting, and campaign planning</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">Generate geohash, plan coverage, and forecast budget</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -175,7 +175,7 @@ with col2:
                         border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">📊</div>
                 <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">Campaign Evaluation</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">Download geohash data, analyze regions, and evaluate campaigns</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">Compare plan vs actual, analyze gaps, and find root causes</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -213,7 +213,7 @@ with col4:
                         border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">👥</div>
                 <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">About Us</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">Team information, documentation, and project details</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">Meet the team, read docs, and explore the project</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
