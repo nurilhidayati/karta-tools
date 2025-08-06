@@ -37,7 +37,7 @@ services:
       - API_HOST=0.0.0.0
       - API_PORT=8000
       - DEBUG=${DEBUG:-true}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:

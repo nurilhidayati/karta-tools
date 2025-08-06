@@ -18,11 +18,7 @@ class Settings:
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
     
-    # OpenAI Configuration for Chatbot
-    OPENAI_API_KEY: Optional[str] = (
-        os.getenv("OPENAI_API_KEY") or 
-        os.getenv("DECLARAI_OPENAI_API_KEY")
-    )
+
  
     @property
     def database_url(self) -> str:

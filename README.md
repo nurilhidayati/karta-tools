@@ -73,8 +73,7 @@ DEBUG=true
 # Streamlit Configuration
 STREAMLIT_PORT=8501
 
-# OpenAI API Key for Chatbot (optional)
-OPENAI_API_KEY=your_openai_api_key_here
+
 ```
 
 ## Docker Commands
