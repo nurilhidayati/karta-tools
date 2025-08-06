@@ -13,6 +13,10 @@ import os
 import math
 import numpy as np
 import requests
+import time
+import hashlib
+import pickle
+from pathlib import Path
 from collections import Counter, defaultdict
 from io import StringIO
 from shapely.geometry import LineString, shape, box
@@ -1025,6 +1029,106 @@ st.markdown("<h1 style='text-align: center; color: #000000;'>Campaign Evaluation
 # API Configuration
 API_BASE_URL = "http://localhost:8000/api/v1"
 
+# OSM Configuration for better reliability
+ox.settings.log_console = True
+ox.settings.use_cache = True
+ox.settings.timeout = 60  # Increase timeout for complex queries
+
+# Cache Configuration
+CACHE_DIR = Path("cache/osm_data")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Caching Helper Functions
+def generate_cache_key(polygon, data_type="areas"):
+    """Generate unique cache key based on polygon bounds and data type"""
+    bounds = polygon.bounds
+    # Create a string representation of bounds rounded to 4 decimal places for consistency
+    bounds_str = f"{bounds[0]:.4f}_{bounds[1]:.4f}_{bounds[2]:.4f}_{bounds[3]:.4f}"
+    cache_key = f"{data_type}_{bounds_str}"
+    # Use hash for shorter filename
+    hash_object = hashlib.md5(cache_key.encode())
+    return hash_object.hexdigest()
+
+def save_to_cache(data, cache_key, data_type):
+    """Save GeoDataFrame to cache"""
+    try:
+        cache_file = CACHE_DIR / f"{cache_key}_{data_type}.pkl"
+        
+        # Save both as pickle (fast) and geojson (backup)
+        with open(cache_file, 'wb') as f:
+            pickle.dump(data, f)
+        
+        # Also save as geojson for manual inspection if needed
+        geojson_file = CACHE_DIR / f"{cache_key}_{data_type}.geojson"
+        if not data.empty:
+            data.to_file(geojson_file, driver="GeoJSON")
+        
+        st.info(f"💾 Cached {len(data)} {data_type} to {cache_file.name}")
+        return True
+    except Exception as e:
+        st.warning(f"Could not save to cache: {e}")
+        return False
+
+def load_from_cache(cache_key, data_type):
+    """Load GeoDataFrame from cache"""
+    try:
+        cache_file = CACHE_DIR / f"{cache_key}_{data_type}.pkl"
+        
+        if cache_file.exists():
+            with open(cache_file, 'rb') as f:
+                data = pickle.load(f)
+            
+            # Validate the loaded data
+            if isinstance(data, gpd.GeoDataFrame) and not data.empty:
+                st.success(f"📁 Loaded {len(data)} {data_type} from cache")
+                return data
+            else:
+                st.warning(f"Cache file {cache_file.name} is empty or invalid")
+                cache_file.unlink()  # Remove invalid cache file
+                return None
+        else:
+            return None
+    except Exception as e:
+        st.warning(f"Could not load from cache: {e}")
+        return None
+
+def is_cache_valid(cache_key, data_type, max_age_hours=24):
+    """Check if cache is valid (exists and not too old)"""
+    try:
+        cache_file = CACHE_DIR / f"{cache_key}_{data_type}.pkl"
+        
+        if not cache_file.exists():
+            return False
+        
+        # Check file age
+        file_age = time.time() - cache_file.stat().st_mtime
+        max_age_seconds = max_age_hours * 3600
+        
+        return file_age < max_age_seconds
+    except:
+        return False
+
+def clear_old_cache(max_age_hours=168):  # Default 7 days
+    """Clear cache files older than specified hours"""
+    try:
+        current_time = time.time()
+        max_age_seconds = max_age_hours * 3600
+        
+        for cache_file in CACHE_DIR.glob("*.pkl"):
+            file_age = current_time - cache_file.stat().st_mtime
+            if file_age > max_age_seconds:
+                cache_file.unlink()
+                # Also remove corresponding geojson file
+                geojson_file = cache_file.with_suffix('.geojson')
+                if geojson_file.exists():
+                    geojson_file.unlink()
+        
+    except Exception as e:
+        st.warning(f"Could not clear old cache: {e}")
+
+# Clear old cache on startup
+clear_old_cache()
+
 # Campaign API Helper Functions
 def get_campaign_names():
     """Get list of campaign names for dropdown selection"""
@@ -1111,7 +1215,8 @@ else:
 
 
 
-st.header("Upload Supporting Data")
+st.header("Upload Supporting Data")   # Clear cache button
+    
 # Initialize session state variables
 session_vars = [
     "flattened_data", "road_gdf", "restricted_areas_gdf", 
@@ -1277,47 +1382,241 @@ def convert_csv_to_geojson(df):
     return gdf_singlepart
 
 def download_restricted_areas(polygon):
+    """Download restricted areas using optimized OSM queries with proper error handling and caching"""
+    
+    # Generate cache key for this polygon
+    cache_key = generate_cache_key(polygon, "restricted_areas")
+    
+    # Try to load from cache first
+    if is_cache_valid(cache_key, "restricted_areas", max_age_hours=24):
+        cached_data = load_from_cache(cache_key, "restricted_areas")
+        if cached_data is not None:
+            return cached_data
+    
     try:
-        tags = {
-            "landuse": ["military", "industrial", "commercial", "government", "cemetery", "landfill"],
+        # Split into smaller, more targeted queries to avoid timeout
+        all_features = []
+        
+        # Query 1: High priority restrictions (military, government)
+        high_priority_tags = {
+            "landuse": ["military", "government"],
+            "amenity": ["police", "prison", "fire_station"],
+            "building": ["military", "government"]
+        }
+        
+        # Query 2: Institutional areas
+        institutional_tags = {
+            "amenity": ["school", "college", "university", "hospital", "kindergarten"],
+            "building": ["school", "university", "hospital"]
+        }
+        
+        # Query 3: Industrial and commercial
+        industrial_tags = {
+            "landuse": ["industrial", "commercial", "cemetery", "landfill"],
+            "building": ["warehouse", "industrial"]
+        }
+        
+        # Query 4: Protected and recreational areas
+        protected_tags = {
             "leisure": ["nature_reserve", "golf_course"],
             "boundary": ["protected_area"],
-            "aeroway": ["aerodrome"],
-            "building": ["military", "government", "warehouse", "university", "school", "hospital"],
-            "amenity": ["school", "college", "university", "police", "hospital", "kindergarten"],
-            "barrier": ["fence", "wall", "gate", "bollard"],
-            "access": ["private", "customers", "permit", "military", "no"]
+            "aeroway": ["aerodrome", "airport"]
         }
-        gdf = ox.features.features_from_polygon(polygon, tags=tags)
-        if gdf is not None and len(gdf) > 0:
-            # Filter to only polygon geometries
-            polygon_mask = gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])
-            gdf = gdf[polygon_mask]
-            return gdf
+        
+        # Query 5: Access barriers
+        barrier_tags = {
+            "barrier": ["fence", "wall", "gate", "bollard"],
+            "access": ["private", "no"]
+        }
+        
+        tag_groups = [high_priority_tags, institutional_tags, industrial_tags, protected_tags, barrier_tags]
+        
+        for i, tags in enumerate(tag_groups):
+            try:
+                # Add small delay between queries to be respectful to OSM servers
+                if i > 0:
+                    time.sleep(1)
+                
+                gdf = ox.features.features_from_polygon(polygon, tags=tags)
+                if gdf is not None and len(gdf) > 0:
+                    # Filter to only polygon and point geometries (points can be buffered later)
+                    valid_mask = gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon", "Point"])
+                    if valid_mask.any():
+                        filtered_gdf = gdf[valid_mask].copy()
+                        
+                        # Buffer point geometries to create areas (50m buffer)
+                        point_mask = filtered_gdf.geometry.geom_type == "Point"
+                        if point_mask.any():
+                            # Convert to UTM for accurate buffering
+                            utm_crs = filtered_gdf.estimate_utm_crs()
+                            utm_gdf = filtered_gdf.to_crs(utm_crs)
+                            utm_gdf.loc[point_mask, 'geometry'] = utm_gdf.loc[point_mask, 'geometry'].buffer(50)
+                            filtered_gdf = utm_gdf.to_crs('EPSG:4326')
+                        
+                        all_features.append(filtered_gdf)
+            except Exception as query_error:
+                st.warning(f"Could not download some restricted areas: {query_error}")
+                continue
+        
+        # Combine all features
+        if all_features:
+            combined_gdf = gpd.GeoDataFrame(pd.concat(all_features, ignore_index=True))
+            
+            # Remove duplicates based on geometry
+            combined_gdf = combined_gdf.drop_duplicates(subset=['geometry'])
+            
+            # Ensure valid geometries
+            combined_gdf = combined_gdf[combined_gdf.geometry.is_valid]
+            
+            # Save to cache
+            save_to_cache(combined_gdf, cache_key, "restricted_areas")
+            
+            st.success(f"✅ Downloaded {len(combined_gdf)} restricted areas")
+            return combined_gdf
         else:
-            return gpd.GeoDataFrame()
+            # Save empty result to cache to avoid repeated queries
+            empty_gdf = gpd.GeoDataFrame()
+            save_to_cache(empty_gdf, cache_key, "restricted_areas")
+            st.info("ℹ️ No restricted areas found in the analysis region")
+            return empty_gdf
+            
     except Exception as e:
-        st.warning(f"Could not download restricted areas: {e}")
+        st.warning(f"Error downloading restricted areas: {e}")
         return gpd.GeoDataFrame()
 
 def download_restricted_roads(polygon):
+    """Download restricted roads using optimized OSM queries with proper error handling and caching"""
+    
+    # Generate cache key for this polygon
+    cache_key = generate_cache_key(polygon, "restricted_roads")
+    
+    # Try to load from cache first
+    if is_cache_valid(cache_key, "restricted_roads", max_age_hours=24):
+        cached_data = load_from_cache(cache_key, "restricted_roads")
+        if cached_data is not None:
+            return cached_data
+    
+    
     try:
-        tags = {
-            "highway": ["service", "unclassified", "track"],
-            "access": ["private", "customers", "permit", "military", "no"],
-            "motorcycle": ["no", "private"],
-            "service": ["driveway", "alley", "emergency_access"],
+        # Split into targeted queries to avoid timeout and get better coverage
+        all_road_features = []
+        
+        # Query 1: Service and access roads
+        service_tags = {
+            "highway": ["service", "unclassified", "track", "path"],
+            "service": ["driveway", "alley", "emergency_access", "parking_aisle"]
         }
-        gdf = ox.features.features_from_polygon(polygon, tags=tags)
-        if gdf is not None and len(gdf) > 0:
-            # Filter to only line geometries
-            line_mask = gdf.geometry.geom_type.isin(["LineString", "MultiLineString"])
-            gdf = gdf[line_mask]
-            return gdf
+        
+        # Query 2: Access restrictions
+        access_tags = {
+            "access": ["private", "customers", "permit", "military", "no", "restricted"],
+            "motor_vehicle": ["no", "private", "permit"],
+            "motorcycle": ["no", "private", "permit"]
+        }
+        
+        # Query 3: Private and gated roads
+        private_tags = {
+            "highway": ["private", "proposed"],
+            "barrier": ["gate", "bollard", "lift_gate"],
+            "foot": ["private", "no"]
+        }
+        
+        tag_groups = [service_tags, access_tags, private_tags]
+        
+        for i, tags in enumerate(tag_groups):
+            try:
+                # Add small delay between queries to be respectful to OSM servers
+                if i > 0:
+                    time.sleep(1)
+                
+                gdf = ox.features.features_from_polygon(polygon, tags=tags)
+                if gdf is not None and len(gdf) > 0:
+                    # Filter to only line geometries and points (gates/barriers)
+                    line_mask = gdf.geometry.geom_type.isin(["LineString", "MultiLineString"])
+                    point_mask = gdf.geometry.geom_type == "Point"
+                    
+                    if line_mask.any():
+                        line_features = gdf[line_mask].copy()
+                        all_road_features.append(line_features)
+                    
+                    # Convert point barriers to small buffered areas for analysis
+                    if point_mask.any():
+                        point_features = gdf[point_mask].copy()
+                        
+                        # Convert to UTM for accurate buffering
+                        utm_crs = point_features.estimate_utm_crs()
+                        utm_gdf = point_features.to_crs(utm_crs)
+                        
+                        # Buffer points by 20m to create road restriction zones
+                        utm_gdf['geometry'] = utm_gdf.geometry.buffer(20)
+                        buffered_features = utm_gdf.to_crs('EPSG:4326')
+                        
+                        all_road_features.append(buffered_features)
+                        
+            except Exception as query_error:
+                st.warning(f"Could not download some restricted roads: {query_error}")
+                continue
+        
+        # Try to get additional restricted roads using the road network graph approach
+        try:
+            # Get road network for the area with filters
+            road_network = ox.graph_from_polygon(
+                polygon, 
+                network_type='drive',
+                simplify=True,
+                retain_all=False
+            )
+            
+            # Convert to GeoDataFrame
+            edges_gdf = ox.graph_to_gdfs(road_network, nodes=False)
+            
+            # Filter for restricted access roads
+            if not edges_gdf.empty:
+                restricted_mask = (
+                    edges_gdf.get('access', '').isin(['private', 'no', 'customers', 'permit']) |
+                    edges_gdf.get('highway', '').isin(['service', 'track', 'path']) |
+                    edges_gdf.get('service', '').notna()
+                )
+                
+                if restricted_mask.any():
+                    restricted_roads = edges_gdf[restricted_mask].copy()
+                    all_road_features.append(restricted_roads)
+                    
+        except Exception as network_error:
+            # Network approach failed, but we might still have features from OSM queries
+            st.info("Could not download road network data, using OSM feature data only")
+        
+        # Combine all road features
+        if all_road_features:
+            combined_gdf = gpd.GeoDataFrame(pd.concat(all_road_features, ignore_index=True))
+            
+            # Remove duplicates based on geometry
+            combined_gdf = combined_gdf.drop_duplicates(subset=['geometry'])
+            
+            # Ensure valid geometries
+            combined_gdf = combined_gdf[combined_gdf.geometry.is_valid]
+            
+            # Filter to only linear features for final result (roads should be lines)
+            final_mask = combined_gdf.geometry.geom_type.isin(["LineString", "MultiLineString"])
+            if final_mask.any():
+                final_gdf = combined_gdf[final_mask]
+            else:
+                final_gdf = combined_gdf  # Keep all if no lines found
+            
+            # Save to cache
+            save_to_cache(final_gdf, cache_key, "restricted_roads")
+            
+            st.success(f"✅ Downloaded {len(final_gdf)} restricted roads")
+            return final_gdf
         else:
-            return gpd.GeoDataFrame()
+            # Save empty result to cache to avoid repeated queries
+            empty_gdf = gpd.GeoDataFrame()
+            save_to_cache(empty_gdf, cache_key, "restricted_roads")
+            st.info("ℹ️ No restricted roads found in the analysis region")
+            return empty_gdf
+            
     except Exception as e:
-        st.warning(f"Could not download restricted roads: {e}")
+        st.warning(f"Error downloading restricted roads: {e}")
         return gpd.GeoDataFrame()
 
 def analyze_gap_intersections(gdf_roads, gdf_polygons, gdf_lines, distance_meters=100.0):
@@ -1778,15 +2077,15 @@ if is_processing:
     analysis_clicked = False
 elif not campaign_selected and not file_uploaded:
     st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-    st.warning('⚠️ Please select a campaign and upload a CSV file to enable gap analysis.')
+  
     analysis_clicked = False
 elif not campaign_selected:
     st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-    st.info('ℹ️ Please select a campaign first.')
+   
     analysis_clicked = False
 elif not file_uploaded:
     st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-    st.info('ℹ️ Please upload a CSV file with road coordinates.')
+   
     analysis_clicked = False
 else:
     analysis_clicked = st.button('UKM Gap Analysis', type='primary', use_container_width=True)
@@ -1845,56 +2144,56 @@ if analysis_clicked and campaign_selected and file_uploaded:
             st.error("❌ Could not create analysis polygon from coordinate data!")
             st.session_state.is_processing_analysis = False
             st.stop()
-            
-            # Generate geohashes for the area
-            unique_geohashes = set()
-            sample_coords = coords_data[::max(1, len(coords_data)//50)]  # Max 50 samples
-            for lon, lat in sample_coords:
-                geohash = generate_geohash(lat, lon, precision=5)
-                unique_geohashes.add(geohash)
-            
-            # Download restrictions
-            st.session_state.restricted_areas_gdf = download_restricted_areas(analysis_polygon)
-            st.session_state.restricted_roads_gdf = download_restricted_roads(analysis_polygon)
-            
-            areas_count = len(st.session_state.restricted_areas_gdf) if st.session_state.restricted_areas_gdf is not None else 0
-            roads_restricted_count = len(st.session_state.restricted_roads_gdf) if st.session_state.restricted_roads_gdf is not None else 0
-            
-            current_status.success(f"✅ Step 3 Complete: Found {areas_count} restricted areas, {roads_restricted_count} restricted roads")
-            progress_bar.progress(0.75)
-            
-            # Step 4: Analyze Gap Intersections
-            current_status.info("📊 Step 4/4: Analyzing gap intersections...")
-            
-            if (st.session_state.restricted_areas_gdf is None or len(st.session_state.restricted_areas_gdf) == 0) and \
-               (st.session_state.restricted_roads_gdf is None or len(st.session_state.restricted_roads_gdf) == 0):
-                st.warning("⚠️ No restricted areas or roads found in the analysis area!")
-                st.session_state.final_analysis_result = gpd.GeoDataFrame()
-            else:
-                st.session_state.final_analysis_result = analyze_gap_intersections(
-                    st.session_state.road_gdf,
-                    st.session_state.restricted_areas_gdf,
-                    st.session_state.restricted_roads_gdf,
-                    distance_buffer
-                )
-            
-            intersections_count = len(st.session_state.final_analysis_result) if st.session_state.final_analysis_result is not None else 0
-            
-            current_status.success(f"✅ Step 4 Complete: Found {intersections_count} intersecting roads")
-            progress_bar.progress(0.9)
-            
-            # Step 5: AI Analysis (Bonus step)
-            current_status.info("🤖 Create analysis ...")
-            
-            st.session_state.ai_analysis_result = analyze_osm_features_with_ai(
-                st.session_state.final_analysis_result,
+        
+        # Generate geohashes for the area
+        unique_geohashes = set()
+        sample_coords = coords_data[::max(1, len(coords_data)//50)]  # Max 50 samples
+        for lon, lat in sample_coords:
+            geohash = generate_geohash(lat, lon, precision=5)
+            unique_geohashes.add(geohash)
+        
+        # Download restrictions
+        st.session_state.restricted_areas_gdf = download_restricted_areas(analysis_polygon)
+        st.session_state.restricted_roads_gdf = download_restricted_roads(analysis_polygon)
+        
+        areas_count = len(st.session_state.restricted_areas_gdf) if st.session_state.restricted_areas_gdf is not None else 0
+        roads_restricted_count = len(st.session_state.restricted_roads_gdf) if st.session_state.restricted_roads_gdf is not None else 0
+        
+        current_status.success(f"✅ Step 3 Complete: Found {areas_count} restricted areas, {roads_restricted_count} restricted roads")
+        progress_bar.progress(0.75)
+        
+        # Step 4: Analyze Gap Intersections
+        current_status.info("📊 Step 4/4: Analyzing gap intersections...")
+        
+        if (st.session_state.restricted_areas_gdf is None or len(st.session_state.restricted_areas_gdf) == 0) and \
+           (st.session_state.restricted_roads_gdf is None or len(st.session_state.restricted_roads_gdf) == 0):
+            st.warning("⚠️ No restricted areas or roads found in the analysis area!")
+            st.session_state.final_analysis_result = gpd.GeoDataFrame()
+        else:
+            st.session_state.final_analysis_result = analyze_gap_intersections(
+                st.session_state.road_gdf,
                 st.session_state.restricted_areas_gdf,
-                st.session_state.restricted_roads_gdf
+                st.session_state.restricted_roads_gdf,
+                distance_buffer
             )
-            
-            progress_bar.progress(1.0)
-            
-            st.session_state.analysis_completed = True
+        
+        intersections_count = len(st.session_state.final_analysis_result) if st.session_state.final_analysis_result is not None else 0
+        
+        current_status.success(f"✅ Step 4 Complete: Found {intersections_count} intersecting roads")
+        progress_bar.progress(0.9)
+        
+        # Step 5: AI Analysis (Bonus step)
+        
+        
+        st.session_state.ai_analysis_result = analyze_osm_features_with_ai(
+            st.session_state.final_analysis_result,
+            st.session_state.restricted_areas_gdf,
+            st.session_state.restricted_roads_gdf
+        )
+        
+        progress_bar.progress(1.0)
+        
+        st.session_state.analysis_completed = True
         st.session_state.is_processing_analysis = False
         
         # Clear progress indicators
@@ -1944,11 +2243,11 @@ if st.session_state.analysis_completed and st.session_state.final_analysis_resul
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("📊 UKM Plan", campaign.get('ukm_plan', 'N/A'))
-                    st.metric("✅ UKM Actual", campaign.get('ukm_actual', 'N/A'))
+                    st.metric("📊 Target UKM Plan", campaign.get('ukm_plan', 'N/A'))
+                    st.metric("✅ UKM Actual Collected", campaign.get('ukm_actual', 'N/A'))
 
                 with col2:
-                    st.metric("🛣️ Total Gap UKM", 
+                    st.metric("🛣️ Total Gap: UKM Plan vs UKM Actual", 
                              f"{total_road_length_km:.2f} km")
 
                     # Calculate intersection percentage
@@ -1956,17 +2255,20 @@ if st.session_state.analysis_completed and st.session_state.final_analysis_resul
                     if total_road_length_km > 0:
                         intersection_percentage = (intersecting_road_length_km / total_road_length_km) * 100
                     
-                    st.metric("📏 Validated Gap UKM", 
+                    st.metric("📏 Total UKM validated cannot be collected", 
                              f"{intersecting_road_length_km:.2f} km",
                              )
 
                 with col3:
                     if severity.get('severity_breakdown'):
                         st.write("**Risk Factors:**")
-                        for factor, count in list(severity['severity_breakdown'].items())[:3]:
+                        for factor, count in list(severity['severity_breakdown'].items())[:5]:
                             st.write(f"• {factor.title()}")
+            st.info("""
+            💡 **Recommendation for Next Year's Planning**
             
-    
+            To make next year's plan more accurate, we should exclude 478.47 km of roads that are always inaccessible due to permanent risks like: Police areas, Military zones, School zones, Private areas, and Hospitals. By removing these from the plan, we can reduce the gap and make operations more efficient.
+            """)
     # Download Results
     if len(st.session_state.final_analysis_result) > 0:
         st.subheader("⬇️ Download Results")
@@ -1979,11 +2281,11 @@ if st.session_state.analysis_completed and st.session_state.final_analysis_resul
         buffer.seek(0)
 
         st.download_button(
-            "🎯 Download Gap Analysis Result",
+            "Download Data Validated Cannot be Collected",
             buffer,
             file_name=final_filename,
             mime="application/geo+json",
-            help="Download the intersecting roads as GeoJSON file",
+            help="Download the validated inaccessible roads as a GeoJSON file.",
             type="primary"
         )
     else:

@@ -142,7 +142,7 @@ def check_api_health():
 
 
 st.markdown("<h1 style='text-align: center; color: #000000;'>SMOOTH</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align: center; color: #666666; font-weight: normal; margin-top: -10px;'>(Smart Mapping Operations Tool Hub)</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center; color: #666666; font-weight: normal; margin-top: -10px;'>(Smart Map Operations Tool Hub)</h3>", unsafe_allow_html=True)
 
 # Create navigation buttons using columns
 col1, col2 = st.columns(2)
@@ -157,12 +157,12 @@ with col1:
                         border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">📋</div>
                 <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">Campaign Preparation</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">Generate geohash, plan coverage, and forecast budget</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">Generate Geohash → Smart Define Targets → Calculate Target UKM → Forecast Budget</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
     
-    if st.button("🚀 Campaign Preparation", key="nav_campaigns_prep", type="primary", use_container_width=True):
+    if st.button("Campaign Preparation", key="nav_campaigns_prep", type="primary", use_container_width=True):
         st.switch_page("pages/1_Campaigns_Preparation.py")
 
 with col2:
@@ -175,12 +175,12 @@ with col2:
                         border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">📊</div>
                 <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">Campaign Evaluation</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">Compare plan vs actual, analyze gaps, and find root causes</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">Compare Targeted UKM Plan vs Actual UKM → Gap Analysis → Smarter Decisions</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
     
-    if st.button("📥 Campaign Evaluation", key="nav_campaigns_eval", type="primary", use_container_width=True):
+    if st.button("Campaign Evaluation", key="nav_campaigns_eval", type="primary", use_container_width=True):
         st.switch_page("pages/2_Campaigns_Evaluation.py")
 
 col3, col4 = st.columns(2)
@@ -195,12 +195,12 @@ with col3:
                         border-left: 4px solid #085A3E;">
                 <div style="font-size: 2.5rem; margin-bottom: 10px;">🛠️</div>
                 <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px; color: #085A3E;">Tools Add-On</div>
-                <div style="font-size: 0.9rem; opacity: 0.8;">File conversion, boundary to geohash, and data format tools</div>
+                <div style="font-size: 0.9rem; opacity: 0.8;">All-in-One Converter Tool from Area to Geohash, Geohash to CSV, and CSV to Geohash</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
     
-    if st.button("🔧 Tools Add-On", key="nav_tools_addon", type="primary", use_container_width=True):
+    if st.button("Tools Add-On", key="nav_tools_addon", type="primary", use_container_width=True):
         st.switch_page("pages/3_Tools_Add_On.py")
 
 with col4:
@@ -218,7 +218,7 @@ with col4:
         </div>
     """, unsafe_allow_html=True)
     
-    if st.button("👋 Meet the Team", key="nav_about_us", type="primary", use_container_width=True):
+    if st.button("Meet the Team", key="nav_about_us", type="primary", use_container_width=True):
         st.switch_page("pages/4_About_Us.py")
 
 

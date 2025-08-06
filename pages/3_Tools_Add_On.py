@@ -576,6 +576,117 @@ st.markdown("""
     .stApp button[kind="secondary"] * {
         color: #FFFFFF !important;
     }
+    
+    /* Close/X button styling - GREEN BACKGROUND */
+    /* File uploader close button */
+    .stFileUploader button[title="Remove file"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+        border-radius: 50% !important;
+        width: 24px !important;
+        height: 24px !important;
+    }
+    
+    .stFileUploader button[title="Remove file"]:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+        border: 1px solid #064229 !important;
+    }
+    
+    /* Close button in file uploader */
+    div[data-testid="stFileUploader"] button[kind="tertiary"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+        border-radius: 50% !important;
+    }
+    
+    div[data-testid="stFileUploader"] button[kind="tertiary"]:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Generic close/X button styling */
+    button[aria-label="Close"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+        border-radius: 50% !important;
+    }
+    
+    button[aria-label="Close"]:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Alternative close button selectors */
+    button[data-testid="baseButton-tertiary"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+    }
+    
+    button[data-testid="baseButton-tertiary"]:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Force all tertiary buttons (typically close buttons) */
+    .stApp button[kind="tertiary"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+    }
+    
+    .stApp button[kind="tertiary"]:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* X symbol styling */
+    .stApp button[kind="tertiary"] * {
+        color: #FFFFFF !important;
+    }
+    
+    button[data-testid="baseButton-tertiary"] * {
+        color: #FFFFFF !important;
+    }
+    
+    /* File uploader X button text/icon */
+    .stFileUploader button * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Ensure X or close icons are white */
+    button[title="Remove file"] * {
+        color: #FFFFFF !important;
+    }
+    
+    button[aria-label="Close"] * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Override any specific X or close icon styling */
+    .stApp [data-testid*="close"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+    }
+    
+    .stApp [title*="close" i], 
+    .stApp [title*="remove" i],
+    .stApp [title*="delete" i] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+    }
+    
+    .stApp [title*="close" i]:hover, 
+    .stApp [title*="remove" i]:hover,
+    .stApp [title*="delete" i]:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 

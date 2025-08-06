@@ -1779,7 +1779,7 @@ def streamlit_complete_workflow_ui():
                 way_options_list = list(way_tags_options.keys())
                 
                 selected_way_tags = st.multiselect(
-                    "Select Highway Types:",
+                    "Select Way Tags:",
                     options=way_options_list,
                     default=default_way_tags,
                     key="way_tags_multiselect",
@@ -1796,7 +1796,12 @@ def streamlit_complete_workflow_ui():
                     'office': 'Office Buildings',
                     'industrial': 'Industrial Buildings',
                     'public': 'Public Buildings',
-                    'apartments': 'Apartments'
+                    'apartments': 'Apartments',
+                    'transportation': 'Transportation Buildings',
+                    'bank': 'Bank',
+                    'cinema': 'Cinema',
+                    'public': 'Public Buildings',
+                    'service': 'Service Buildings',
                 }
                 
                 default_buildings = ['residential', 'building', 'commercial', 'retail']
@@ -1824,19 +1829,41 @@ def streamlit_complete_workflow_ui():
                     'convenience': 'Convenience Stores',
                     'supermarket': 'Supermarkets',
                     'marketplace': 'Marketplaces',
+                    'museum': 'Museums',
+                    'hotel': 'Hotels',
                     'bank': 'Banks',
-                    'atm': 'ATMs',
-                    'clinic': 'Clinics',
-                    'pharmacy': 'Pharmacies',
-                    'hospital': 'Hospitals',
-                    'school': 'Schools',
-                    'college': 'Colleges',
-                    'university': 'Universities'
+                    'airport': 'Airport',
+                    'monument': 'Monument',
+                    'mosque': 'Mosque',
+                    'bar': 'Bar/Pub/Club',
+                    'pub': 'Bar/Pub/Club',
+                    'club': 'Bar/Pub/Club',
+                    'movie': 'Movie/Theatre',
+                    'theatre': 'Movie/Theatre',
+                    'casino': 'Casino',
+                    'church': 'Church',
+                    'police': 'Police',
+                    'commercial': 'Commercial Building',
+                    'quay': 'Quay',
+                    'education': 'Education',
+                    'residential': 'Residential',
+                    'embassy': 'Embassy',
+                    'shopping_mall': 'Shopping Mall/Shops',
+                    'food_and_beverage': 'Food and Beverage',
+                    'sports': 'Sports/Recreation Center',
+                    'recreation': 'Sports/Recreation Center',
+                    'government': 'Government Building',
+                    'stadium': 'Stadium',
+                    'healthcare': 'Healthcare',
+                    'station': 'Station',
+                    'temple': 'Temple',
+                    'library': 'Library',
+                    'utilities': 'Utilities',
+                    'market': 'Market',
                 }
                 
                 default_pois = ['shop', 'restaurant', 'fast_food', 'cafe', 'food_court', 'bakery', 
-                               'convenience', 'supermarket', 'marketplace', 'bank', 'atm', 'clinic', 
-                               'pharmacy', 'hospital', 'school', 'college', 'university']
+                               'convenience', 'supermarket', 'marketplace', 'bank']
                 
                 # Create list of options for multiselect (just tag names)
                 poi_options_list = list(poi_options.keys())
@@ -1893,11 +1920,11 @@ def streamlit_complete_workflow_ui():
         generate_clicked = False
     elif not parameters_selected:
         st.button('Generate Plan', type='primary', disabled=True, use_container_width=True)
-        st.warning(' Please select at least one parameter above to enable plan generation.')
+      
         generate_clicked = False
     elif not region_selected:
         st.button('Generate Plan', type='primary', disabled=True, use_container_width=True)
-        st.info('ℹ Please select a country and region first.')
+       
         generate_clicked = False
     else:
         generate_clicked = st.button('Generate Plan', type='primary', use_container_width=True)

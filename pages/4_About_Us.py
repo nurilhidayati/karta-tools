@@ -197,7 +197,6 @@ for col, mentor in zip([col2, col4], mentors):
 st.subheader("📘 Documentation")
 st.write("Here’s the guideline to help you understand and work on the project smoothly!")
 st.write("Github Repository: https://github.com/nurilhidayati/karta-tools")
-st.write("Presentation: https://github.com/nurilhidayati/karta-tools")
 
 
 # Footer
