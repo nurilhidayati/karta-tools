@@ -742,7 +742,7 @@ st.markdown("<h1 style='text-align: center; color: #000000;'>Tools Add-On</h1>",
 
 
 st.markdown("---")
-st.subheader("Boundary to GeoHash Converter")
+st.title("Area to GeoHash Converter")
 st.markdown("Upload a boundary file (GeoJSON, KML, SHP) and convert it to GeoHash with selectable precision levels.")
 
 # Initialize session state for boundary to geohash conversion
@@ -910,7 +910,7 @@ st.markdown("---")
 # GEOJSON TO CSV CONVERTER SECTION
 # ============================================================================
 
-st.title("GeoJSON to CSV Converter")
+st.title("Geohash to CSV Converter")
 st.markdown("Upload one or more GeoJSON files. Each file will be converted to a CSV with geometry coordinates.")
 
 uploaded_files = st.file_uploader("📄 Upload GeoJSON files", type="geojson", accept_multiple_files=True, key="geojson_to_csv_uploader")

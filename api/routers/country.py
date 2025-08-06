@@ -88,120 +88,27 @@ async def get_all_countries(db: Session = Depends(get_db)):
 @router.get("/pricing", response_model=List[CountryPricingResponse])
 async def get_countries_with_pricing(db: Session = Depends(get_db)):
     """Get all countries with their pricing information for forecast calculations"""
-    try:
-        countries = db.query(Country).all()
-        
-        if not countries:
-            # If no countries exist, create default ones
-            logger.info("No countries found, creating default countries...")
-            default_countries = [
-                {
-                    "name": "Indonesia",
-                    "table": "indonesia_table",
-                    "currency": "IDR",
-                    "currency_symbol": "Rp",
-                    "ukm_price": 8000.0,
-                    "insurance": 132200.0,
-                    "dataplan": 450000.0,
-                    "exchange_rate_to_usd": 0.000063
-                },
-                {
-                    "name": "Malaysia",
-                    "table": "malaysia_table", 
-                    "currency": "MYR",
-                    "currency_symbol": "RM",
-                    "ukm_price": 2.0,
-                    "insurance": 35.0,
-                    "dataplan": 120.0,
-                    "exchange_rate_to_usd": 0.22
-                },
-                {
-                    "name": "Thailand",
-                    "table": "thailand_table",
-                    "currency": "THB", 
-                    "currency_symbol": "฿",
-                    "ukm_price": 90.0,
-                    "insurance": 1200.0,
-                    "dataplan": 4000.0,
-                    "exchange_rate_to_usd": 0.029
-                },
-                {
-                    "name": "United States",
-                    "table": "usa_table",
-                    "currency": "USD",
-                    "currency_symbol": "$", 
-                    "ukm_price": 0.25,
-                    "insurance": 8.5,
-                    "dataplan": 30.0,
-                    "exchange_rate_to_usd": 1.0
-                }
-            ]
-            
-            try:
-                for country_data in default_countries:
-                    country = Country(**country_data)
-                    db.add(country)
-                db.commit()
-                countries = db.query(Country).all()
-                logger.info(f"Created {len(countries)} default countries")
-            except Exception as e:
-                logger.error(f"Failed to create default countries: {e}")
-                db.rollback()
-                # Return hardcoded data if database creation fails
-                return [
-                    CountryPricingResponse(
-                        id=1,
-                        name="Indonesia",
-                        currency="IDR",
-                        currency_symbol="Rp",
-                        ukm_price=8000.0,
-                        insurance=132200.0,
-                        dataplan=450000.0,
-                        exchange_rate_to_usd=0.000063
-                    )
-                ]
-        
-        # Convert to response format
-        pricing_data = []
-        for country in countries:
-            pricing_data.append(CountryPricingResponse(
-                id=country.id,
-                name=country.name,
-                currency=safe_getattr(country, 'currency', 'USD'),
-                currency_symbol=safe_getattr(country, 'currency_symbol', '$'),
-                ukm_price=safe_getattr(country, 'ukm_price', 8000.0),
-                insurance=safe_getattr(country, 'insurance_per_dax_per_month', 132200.0),
-                dataplan=safe_getattr(country, 'dataplan_per_dax_per_month', 450000.0),
-                exchange_rate_to_usd=safe_getattr(country, 'exchange_rate_to_usd', 1.0)
-            ))
-        
-        return pricing_data
-        
-    except Exception as e:
-        logger.error(f"Error getting countries with pricing: {str(e)}")
-        # Return hardcoded fallback data
-        return [
+    query = text(
+        """
+        select * from country
+    """
+    )
+    result = db.execute(query)
+    data = []
+    for row in result:
+        data.append(
             CountryPricingResponse(
-                id=1,
-                name="Indonesia",
-                currency="IDR",
-                currency_symbol="Rp",
-                ukm_price=8000.0,
-                insurance=132200.0,
-                dataplan=450000.0,
-                exchange_rate_to_usd=0.000063
-            ),
-            CountryPricingResponse(
-                id=2,
-                name="Malaysia", 
-                currency="MYR",
-                currency_symbol="RM",
-                ukm_price=2.0,
-                insurance=35.0,
-                dataplan=120.0,
-                exchange_rate_to_usd=0.22
+                id=row.id,
+                name=row.name,
+                currency=row.currency,
+                currency_symbol=row.currency_symbol,
+                exchange_rate_to_usd=0.000063,
+                regions=[]
             )
-        ]
+        )
+    return data
+
+            
 
 @router.get("/pricing/{country_id}", response_model=CountryPricingResponse)
 async def get_country_pricing(country_id: int, db: Session = Depends(get_db)):
@@ -411,8 +318,8 @@ async def create_region(region_data: CreateRegionRequest, db: Session = Depends(
             name=region_data.name,
             country_id=region_data.country_id,
             ukm_price_multiplier=region_data.ukm_price_multiplier,
-            insurance_multiplier=region_data.insurance,
-            dataplan_multiplier=region_data.dataplan,
+            insurance_multiplier=region_data.insurance_multiplier,
+            dataplan_multiplier=region_data.dataplan_multiplier,
             regional_overhead=region_data.regional_overhead,
             transportation_cost=region_data.transportation_cost
         )

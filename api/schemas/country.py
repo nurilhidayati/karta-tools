@@ -7,8 +7,8 @@ class RegionSchemas(BaseModel):
     name: str
     country_id: int
     ukm_price_multiplier: Optional[float] = 1.0
-    insurance: Optional[float] = 1.0
-    dataplan: Optional[float] = 1.0
+    insurance_multiplier: Optional[float] = 1.0
+    dataplan_multiplier: Optional[float] = 1.0
     regional_overhead: Optional[float] = 0.0
     transportation_cost: Optional[float] = 0.0
     created_at: Optional[datetime] = None
@@ -38,9 +38,6 @@ class CountryPricingResponse(BaseModel):
     name: str
     currency: str
     currency_symbol: str
-    ukm_price: float
-    insurance: float
-    dataplan: float
     exchange_rate_to_usd: float
     regions: Optional[List[RegionSchemas]] = []
 
@@ -77,16 +74,16 @@ class CreateRegionRequest(BaseModel):
     name: str
     country_id: int
     ukm_price_multiplier: Optional[float] = 1.0
-    insurance: Optional[float] = 1.0
-    dataplan: Optional[float] = 1.0
+    insurance_multiplier: Optional[float] = 1.0
+    dataplan_multiplier: Optional[float] = 1.0
     regional_overhead: Optional[float] = 0.0
     transportation_cost: Optional[float] = 0.0
 
 class UpdateRegionRequest(BaseModel):
     name: Optional[str] = None
     ukm_price_multiplier: Optional[float] = None
-    insurance: Optional[float] = None
-    dataplan: Optional[float] = None
+    insurance_multiplier: Optional[float] = None
+    dataplan_multiplier: Optional[float] = None
     regional_overhead: Optional[float] = None
     transportation_cost: Optional[float] = None
 

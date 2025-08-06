@@ -10,7 +10,7 @@ from streamlit_folium import st_folium
 import math
 
 # API Configuration
-API_BASE_URL = "http://localhost:8000/api/v1"
+API_BASE_URL = f"http://{settings.API_HOST}:{settings.API_PORT}/api/v1"
 
 # CSS for styling
 st.markdown("""
@@ -342,15 +342,35 @@ def call_backend_calculate_ukm_advanced(geohashes, chunk_size=15, max_workers=10
 def get_countries():
     """Get list of available countries from API"""
     try:
-        response = requests.get(f"{API_BASE_URL}/boundary/all")
+        response = requests.get(f"{API_BASE_URL}/boundary/all", timeout=10)
         if response.status_code == 200:
-            return response.json()
+            countries = response.json()
+            return countries if countries else []
         else:
-            st.error(f"Failed to load countries: {response.status_code}")
-            return []
+            st.warning(f"⚠️ Failed to load countries from API: {response.status_code}")
+            return get_fallback_countries_simple()
+    except requests.exceptions.ConnectionError:
+        st.warning("⚠️ API connection failed. Using fallback country data.")
+        return get_fallback_countries_simple()
+    except requests.exceptions.Timeout:
+        st.warning("⚠️ API timeout. Using fallback country data.")
+        return get_fallback_countries_simple()
     except Exception as e:
-        st.error(f"Error connecting to API: {str(e)}")
-        return []
+        st.warning(f"⚠️ Error connecting to API: {str(e)}. Using fallback data.")
+        return get_fallback_countries_simple()
+
+def get_fallback_countries_simple():
+    """Fallback country data when API is unavailable"""
+    return [
+        {"id": 1, "name": "Indonesia"},
+        {"id": 2, "name": "Malaysia"}, 
+        {"id": 3, "name": "Thailand"},
+        {"id": 4, "name": "United States"},
+        {"id": 5, "name": "Singapore"},
+        {"id": 6, "name": "Vietnam"},
+        {"id": 7, "name": "Philippines"},
+        {"id": 8, "name": "India"}
+    ]
 
 def get_boundary_data(country_id):
     """Get boundary data for a specific country from API"""
@@ -536,28 +556,54 @@ def get_countries_pricing():
         
         if response.status_code == 200:
             countries = response.json()
+            
             if countries and len(countries) > 0:
                 # Map API field names to simplified names
                 mapped_countries = []
                 for country in countries:
+                    # Get country name to determine appropriate defaults
+                    country_name = country.get("name", "Unknown Country")
+                    
+                    # Country-specific defaults
+                    if country_name.lower() == "indonesia":
+                        default_ukm = 8000.0
+                        default_insurance = 132200.0
+                        default_dataplan = 400000.0
+                        default_currency = "IDR"
+                        default_symbol = "Rp"
+                        default_exchange = 0.000063
+                    else:
+                        # Generic defaults for other countries
+                        default_ukm = 0.25
+                        default_insurance = 8.5
+                        default_dataplan = 30.0
+                        default_currency = "USD"
+                        default_symbol = "$"
+                        default_exchange = 1.0
+                    
+                    # Provide better fallback values to prevent None issues
                     mapped_country = {
                         "id": country.get("id"),
-                        "name": country.get("name"),
-                        "currency": country.get("currency"),
-                        "currency_symbol": country.get("currency_symbol"),
-                        "ukm_price": country.get("ukm_price"),
-                        "insurance": country.get("insurance_per_dax_per_month", country.get("insurance", 0)),
-                        "dataplan": country.get("dataplan_per_dax_per_month", country.get("dataplan", 0)),
-                        "exchange_rate_to_usd": country.get("exchange_rate_to_usd")
+                        "name": country_name,
+                        "currency": country.get("currency", default_currency),
+                        "currency_symbol": country.get("currency_symbol", default_symbol),
+                        "ukm_price": country.get("ukm_price", default_ukm),
+                        "insurance": country.get("insurance_per_dax_per_month", country.get("insurance", default_insurance)),
+                        "dataplan": country.get("dataplan_per_dax_per_month", country.get("dataplan", default_dataplan)),
+                        "exchange_rate_to_usd": country.get("exchange_rate_to_usd", default_exchange)
                     }
                     mapped_countries.append(mapped_country)
+                
                 return mapped_countries
             else:
+                st.warning("⚠️ API returned empty countries list - using fallback")
                 return get_fallback_countries()
         else:
+            st.error(f"❌ API Error {response.status_code}: {response.text[:200]}...")
             return get_fallback_countries()
             
-    except:
+    except Exception as e:
+        st.error(f"❌ API Connection Error: {str(e)}")
         return get_fallback_countries()
 
 def get_fallback_countries():
@@ -570,7 +616,7 @@ def get_fallback_countries():
             "currency_symbol": "Rp",
             "ukm_price": 8000.0,
             "insurance": 132200.0,
-            "dataplan": 450000.0,
+            "dataplan": 400000.0,
             "exchange_rate_to_usd": 0.000063
         },
         {
@@ -602,11 +648,69 @@ def get_fallback_countries():
             "insurance": 8.5,
             "dataplan": 30.0,
             "exchange_rate_to_usd": 1.0
+        },
+        {
+            "id": 5,
+            "name": "Singapore",
+            "currency": "SGD",
+            "currency_symbol": "S$",
+            "ukm_price": 0.35,
+            "insurance": 12.0,
+            "dataplan": 40.0,
+            "exchange_rate_to_usd": 0.74
+        },
+        {
+            "id": 6,
+            "name": "Vietnam",
+            "currency": "VND",
+            "currency_symbol": "₫",
+            "ukm_price": 6000.0,
+            "insurance": 80000.0,
+            "dataplan": 300000.0,
+            "exchange_rate_to_usd": 0.000041
+        },
+        {
+            "id": 7,
+            "name": "Philippines",
+            "currency": "PHP",
+            "currency_symbol": "₱",
+            "ukm_price": 15.0,
+            "insurance": 200.0,
+            "dataplan": 800.0,
+            "exchange_rate_to_usd": 0.018
+        },
+        {
+            "id": 8,
+            "name": "India",
+            "currency": "INR",
+            "currency_symbol": "₹",
+            "ukm_price": 20.0,
+            "insurance": 250.0,
+            "dataplan": 1000.0,
+            "exchange_rate_to_usd": 0.012
         }
     ]
 
 def format_currency(amount, currency="USD", symbol="$"):
     """Format currency with proper symbol and decimal places"""
+    # Handle None or invalid values
+    if amount is None:
+        amount = 0
+    
+    # Ensure amount is numeric
+    try:
+        amount = float(amount)
+    except (ValueError, TypeError):
+        amount = 0
+    
+    # Handle None symbol
+    if symbol is None:
+        symbol = "$"
+    
+    # Handle None currency
+    if currency is None:
+        currency = "USD"
+    
     if currency in ["IDR"]:
         return f"{symbol} {amount:,.0f}"
     else:
@@ -624,12 +728,32 @@ def forecast_budget_simple(target_km, dax_number, country_data):
     if month_estimation < 1:
         month_estimation = 1
     
-    ukm_price = country_data['ukm_price']
-    insurance_rate = country_data['insurance']
-    dataplan_rate = country_data['dataplan']
-    currency = country_data['currency']
-    currency_symbol = country_data['currency_symbol']
-    exchange_rate = country_data['exchange_rate_to_usd']
+    # Add validation and fallback values to prevent None errors with country-specific defaults
+    country_name = country_data.get('name', '').lower()
+    
+    # Indonesia-specific defaults
+    if 'indonesia' in country_name:
+        default_ukm = 8000.0
+        default_insurance = 132200.0
+        default_dataplan = 400000.0
+        default_currency = 'IDR'
+        default_symbol = 'Rp'
+        default_exchange = 0.000063
+    else:
+        # Generic defaults for other countries
+        default_ukm = 0.25
+        default_insurance = 8.5
+        default_dataplan = 30.0
+        default_currency = 'USD'
+        default_symbol = '$'
+        default_exchange = 1.0
+    
+    ukm_price = country_data.get('ukm_price', default_ukm) or default_ukm
+    insurance_rate = country_data.get('insurance', default_insurance) or default_insurance
+    dataplan_rate = country_data.get('dataplan', default_dataplan) or default_dataplan
+    currency = country_data.get('currency', default_currency) or default_currency
+    currency_symbol = country_data.get('currency_symbol', default_symbol) or default_symbol
+    exchange_rate = country_data.get('exchange_rate_to_usd', default_exchange) or default_exchange
     
     basic_incentive = target_km * ukm_price
     bonus_coverage = basic_incentive
@@ -654,6 +778,57 @@ def forecast_budget_simple(target_km, dax_number, country_data):
         "Currency": currency,
         "Symbol": currency_symbol,
         "Country": country_data['name']
+    }
+
+def forecast_budget_custom(target_km, dax_number, custom_params):
+    """Calculate forecast budget using custom parameters"""
+    # First calculate week estimation using formula: target_km / (dax_count * 100)
+    week_estimation = target_km / (dax_number * 100)
+    
+    # Then convert to months using ceiling (always round up any fraction)
+    month_estimation = math.ceil(week_estimation / 4)
+    
+    # Ensure minimum 1 month
+    if month_estimation < 1:
+        month_estimation = 1
+    
+    # Use custom parameters
+    ukm_price = custom_params['ukm_price']
+    insurance_rate = custom_params['insurance_rate']
+    dataplan_rate = custom_params['dataplan_rate']
+    currency = custom_params['currency']
+    currency_symbol = custom_params['currency_symbol']
+    exchange_rate = custom_params['exchange_rate_to_usd']
+    
+    # Use custom basic incentive if provided, otherwise calculate automatically
+    custom_basic_incentive = custom_params.get('custom_basic_incentive')
+    if custom_basic_incentive is not None:
+        basic_incentive = custom_basic_incentive
+    else:
+        basic_incentive = target_km * ukm_price
+    
+    bonus_coverage = basic_incentive
+    insurance = insurance_rate * dax_number * month_estimation
+    dataplan = dataplan_rate * dax_number * month_estimation
+    
+    total_before_misc = basic_incentive + bonus_coverage + insurance + dataplan
+    miscellaneous = total_before_misc * 0.05
+    total_forecast = total_before_misc + miscellaneous
+    total_forecast_usd = total_forecast * exchange_rate
+    
+    return {
+        "Week Estimation": round(week_estimation, 2),
+        "Month Estimation": month_estimation,
+        "Basic Incentive": round(basic_incentive),
+        ">95% Bonus Coverage": round(bonus_coverage),
+        "Insurance": round(insurance),
+        "Dataplan": round(dataplan),
+        "Miscellaneous (5%)": round(miscellaneous),
+        "Total Forecast Budget": round(total_forecast),
+        "Total Forecast Budget (USD)": round(total_forecast_usd, 2),
+        "Currency": currency,
+        "Symbol": currency_symbol,
+        "Country": custom_params.get('country_name', 'Custom')
     }
 
 # Initialize session state for persistent results (must be at module level)
@@ -1517,18 +1692,12 @@ def streamlit_complete_workflow_ui():
     </style>
     """, unsafe_allow_html=True)
     
+   
+    
     # Navigation header
     st.markdown("<h1 style='text-align: center; color: #000000;'>Campaign Preparation</h1>", unsafe_allow_html=True)
-   
-    # API health check
-    try:
-        health_response = requests.get(f"{API_BASE_URL}/geospatial/health", timeout=5)
-        if health_response.status_code != 200:
-            st.error("❌ API server is not running. Please start the API server.")
-            st.stop()
-    except Exception as e:
-        st.error("❌ Cannot connect to API server. Please check if it's running.")
-        st.stop()
+    
+    
     
     # Load countries
     countries = get_countries()
@@ -1570,36 +1739,173 @@ def streamlit_complete_workflow_ui():
             # Check if valid region is selected
             region_selected = selected_region_name != "-- Select Region --"
             
+            # Initialize variables for parameters
+            all_selected_tags = []
+            top_percent = 0.5
+            precision = 6
+            chunk_size = 15
+            max_workers = 10
+            selected_region_data = None
+            
             if region_selected:
                 selected_region_index = region_options.index(selected_region_name)
                 selected_region_data = regions[selected_region_index]
                 
-                # Use default values for advanced options
-                top_percent = 0.5
-                chunk_size = 15
-                max_workers = 10
-                precision = 6
-        
-            
-            # Show button with appropriate state
+            # Parameter Selection Section - Always show if region is selected
             if region_selected:
-                # Check if currently processing
-                is_processing = st.session_state.get('is_processing', False)
+                st.subheader("⚙️ Select Parameters")
                 
-                if is_processing:
-                    st.button("🔄 Processing...", type="secondary", disabled=True, use_container_width=True)
-                    generate_clicked = False
-                else:
-                    generate_clicked = st.button("Generate Plan", type="primary", use_container_width=True)
-                    
-              
-            else:
-                st.button("Generate Plan", type="primary", disabled=True, use_container_width=True)
-                generate_clicked = False
+                # Way Tags Selection
+                st.markdown("**🛣️ Way Tags:**")
+                way_tags_options = {
+                    'motorway': 'Motorway',
+                    'motorway_link': 'Motorway Link',
+                    'trunk': 'Trunk Road',
+                    'trunk_link': 'Trunk Link',
+                    'primary': 'Primary Road',
+                    'primary_link': 'Primary Link',
+                    'secondary': 'Secondary Road',
+                    'secondary_link': 'Secondary Link',
+                    'tertiary': 'Tertiary Road',
+                    'tertiary_link': 'Tertiary Link',
+                    'residential': 'Residential Street',
+                    'living_street': 'Living Street',
+                    'service': 'Service Road',
+                    'unclassified': 'Unclassified Road'
+                }
+                
+                default_way_tags = ['motorway', 'motorway_link','secondary', 'secondary_link', 'primary', 'primary_link', 'residential', 'trunk', 'trunk_link', 'tertiary', 'tertiary_link','living_street', 'service', 'unclassified']
+                # Create list of options for multiselect (just tag names)
+                way_options_list = list(way_tags_options.keys())
+                
+                selected_way_tags = st.multiselect(
+                    "Select Highway Types:",
+                    options=way_options_list,
+                    default=default_way_tags,
+                    key="way_tags_multiselect",
+                    help="Select multiple highway types for density analysis"
+                )
+                
+                # Building Types Selection
+                st.markdown("**🏢 Building Types:**")
+                building_options = {
+                    'residential': 'Residential Buildings',
+                    'building': 'General Buildings', 
+                    'commercial': 'Commercial Buildings',
+                    'retail': 'Retail Buildings',
+                    'office': 'Office Buildings',
+                    'industrial': 'Industrial Buildings',
+                    'public': 'Public Buildings',
+                    'apartments': 'Apartments'
+                }
+                
+                default_buildings = ['residential', 'building', 'commercial', 'retail']
+                
+                # Create list of options for multiselect (just tag names)
+                building_options_list = list(building_options.keys())
+                
+                selected_buildings = st.multiselect(
+                    "Select Building Types:",
+                    options=building_options_list,
+                    default=default_buildings,
+                    key="building_types_multiselect",
+                    help="Select multiple building types for density analysis"
+                )
+                
+                # POI (Points of Interest) Selection
+                st.markdown("**📍 Points of Interest (POI):**")
+                poi_options = {
+                    'shop': 'Shops/Stores',
+                    'restaurant': 'Restaurants',
+                    'fast_food': 'Fast Food',
+                    'cafe': 'Cafes',
+                    'food_court': 'Food Courts',
+                    'bakery': 'Bakeries',
+                    'convenience': 'Convenience Stores',
+                    'supermarket': 'Supermarkets',
+                    'marketplace': 'Marketplaces',
+                    'bank': 'Banks',
+                    'atm': 'ATMs',
+                    'clinic': 'Clinics',
+                    'pharmacy': 'Pharmacies',
+                    'hospital': 'Hospitals',
+                    'school': 'Schools',
+                    'college': 'Colleges',
+                    'university': 'Universities'
+                }
+                
+                default_pois = ['shop', 'restaurant', 'fast_food', 'cafe', 'food_court', 'bakery', 
+                               'convenience', 'supermarket', 'marketplace', 'bank', 'atm', 'clinic', 
+                               'pharmacy', 'hospital', 'school', 'college', 'university']
+                
+                # Create list of options for multiselect (just tag names)
+                poi_options_list = list(poi_options.keys())
+                
+                selected_pois = st.multiselect(
+                    "Select Points of Interest:",
+                    options=poi_options_list,
+                    default=default_pois,
+                    key="poi_types_multiselect",
+                    help="Select multiple POI types for density analysis"
+                )
+                
+                # Combine all selected tags
+                all_selected_tags = selected_way_tags + selected_buildings + selected_pois
+                
+                # Advanced Options (collapsed by default)
+                with st.expander("🔧 Advanced Options", expanded=False):
+                        precision = st.selectbox(
+                            "Geohash Precision", 
+                            options=[5, 6, 7], 
+                            index=1,
+                            help="Higher precision = smaller areas, more detail"
+                        )
+                        
+                
             
-            # Process workflow if button clicked and region selected
-            if generate_clicked and region_selected:
-                # Set processing state
+            # Check if parameters are selected
+            parameters_selected = len(all_selected_tags) > 0
+        else:
+            st.selectbox("Choose a region:", ["-- No regions available --"], disabled=True)
+            st.warning("⚠️ No regions available for the selected country")
+            
+            # Set variables for consistency
+            region_selected = False
+            all_selected_tags = []
+            parameters_selected = False
+            generate_clicked = False
+    else:
+        st.selectbox("Choose a region:", ["-- Select Country first --"], disabled=True)
+        
+        # Set variables for consistency
+        region_selected = False
+        all_selected_tags = []
+        parameters_selected = False
+        generate_clicked = False
+            
+    
+    # Show button with appropriate state
+    # Check if currently processing
+    is_processing = st.session_state.get('is_processing', False)
+    
+    if is_processing:
+        st.button('🔄 Processing...', type='secondary', disabled=True, use_container_width=True)
+        generate_clicked = False
+    elif not parameters_selected:
+        st.button('Generate Plan', type='primary', disabled=True, use_container_width=True)
+        st.warning(' Please select at least one parameter above to enable plan generation.')
+        generate_clicked = False
+    elif not region_selected:
+        st.button('Generate Plan', type='primary', disabled=True, use_container_width=True)
+        st.info('ℹ Please select a country and region first.')
+        generate_clicked = False
+    else:
+        generate_clicked = st.button('Generate Plan', type='primary', use_container_width=True)
+    # Process workflow if button clicked and region selected
+    if (generate_clicked and region_selected and parameters_selected and 
+        'selected_country' in locals() and 'selected_region_name' in locals() and 
+        'selected_region_data' in locals()):
+        
                 st.session_state.is_processing = True
                 
                 # Clear previous results and store new selection info
@@ -1615,6 +1921,7 @@ def streamlit_complete_workflow_ui():
                     result = process_complete_geohash_workflow(
                         country_id=country_id,
                         region_data=selected_region_data,
+                tag_filters=all_selected_tags,  # Use selected parameters
                         top_percent=top_percent,
                         precision=precision,
                         chunk_size=chunk_size,
@@ -1639,16 +1946,6 @@ def streamlit_complete_workflow_ui():
                     for error in result['errors']:
                         st.error(f"• {error}")
                     st.info("💡 Please try again or contact support if the problem persists.")
-        else:
-            st.selectbox("Choose a region:", ["-- No regions available --"], disabled=True)
-            st.button("Generate Plan", type="primary", disabled=True, use_container_width=True)
-            st.warning("⚠️ No regions available for the selected country")
-    else:
-        st.selectbox("Choose a region:", ["-- Select Country first --"], disabled=True)
-        
-        # Always show Generate Plan button (disabled)
-        st.button("Generate Plan", type="primary", disabled=True, use_container_width=True)
-        
 
     # Display results and download buttons if workflow has been completed
     # This section is outside all the selection logic to ensure it always runs
@@ -1726,6 +2023,9 @@ def streamlit_complete_workflow_ui():
         st.subheader("💱 Forecast Budget Calculator")
         
         try:
+            # Get target km from workflow result
+            target_km = result['step3_ukm_result']['total_road_length_km']
+            
             # Load countries pricing data
             countries_pricing = get_countries_pricing()
             
@@ -1734,10 +2034,7 @@ def streamlit_complete_workflow_ui():
                 country_dict = {country['name']: country for country in countries_pricing}
                 country_names = list(country_dict.keys())
                 
-                # Get target km from workflow result
-                target_km = result['step3_ukm_result']['total_road_length_km']
-                
-                # Use columns for compact input layout
+                # Create two columns for better layout
                 col1, col2 = st.columns([1, 1])
                 
                 with col1:   
@@ -1752,7 +2049,6 @@ def streamlit_complete_workflow_ui():
                         key="budget_country_selector"
                     )
                     
-                with col2:
                     # DAX number input
                     dax_number = st.number_input(
                         "👷 DAX Count:", 
@@ -1760,19 +2056,79 @@ def streamlit_complete_workflow_ui():
                         value=1,
                         step=1,
                         help="Number of DAX (drivers)"
-                    )
+                        )
                     
-                    # Enhanced Calculate Budget button with validation
-                    budget_ready = target_km > 0 and dax_number > 0 and selected_budget_country
+                with col2:
+                    # Get default values from selected country and show parameter inputs
+                    if selected_budget_country:
+                        country_data = country_dict[selected_budget_country]
+                        # Add validation and fallback values to prevent None errors with country-specific defaults
+                        country_name = country_data.get('name', '').lower()
+                        
+                        # Indonesia-specific defaults
+                        if 'indonesia' in country_name:
+                            fallback_ukm = 8000.0
+                            fallback_insurance = 132200.0
+                            fallback_dataplan = 400000.0
+                            fallback_currency = 'IDR'
+                            fallback_symbol = 'Rp'
+                        else:
+                            # Generic defaults for other countries
+                            fallback_ukm = 0.25
+                            fallback_insurance = 8.5
+                            fallback_dataplan = 30.0
+                            fallback_currency = 'USD'
+                            fallback_symbol = '$'
+                        
+                        default_ukm_price = country_data.get('ukm_price', fallback_ukm) or fallback_ukm
+                        default_insurance = country_data.get('insurance', fallback_insurance) or fallback_insurance
+                        default_dataplan = country_data.get('dataplan', fallback_dataplan) or fallback_dataplan
+                        currency = country_data.get('currency', fallback_currency) or fallback_currency
+                        currency_symbol = country_data.get('currency_symbol', fallback_symbol) or fallback_symbol
+                        
+                        # UKM Price input - user input custom value
+                        ukm_price_input = st.number_input(
+                            f"🛣️ UKM Price per KM ({currency}):",
+                            min_value=0.0,
+                            value=default_ukm_price,
+                            step=0.01,
+                            help=f"Default: {format_currency(default_ukm_price, currency, currency_symbol)} per KM",
+                            key="predefined_ukm_price"
+                        )
+                        
+                        # Insurance input
+                        insurance_input = st.number_input(
+                            f"🛡️ Insurance/DAX/Month ({currency}):",
+                            min_value=0.0,
+                            value=default_insurance,
+                            step=0.01,
+                            help=f"Default: {format_currency(default_insurance, currency, currency_symbol)}",
+                            key="predefined_insurance"
+                        )
+                        
+                        # Dataplan input
+                        dataplan_input = st.number_input(
+                            f"📱 Dataplan/DAX/Month ({currency}):",
+                            min_value=0.0,
+                            value=default_dataplan,
+                            step=0.01,
+                            help=f"Default: {format_currency(default_dataplan, currency, currency_symbol)}",
+                            key="predefined_dataplan"
+                        )
+                    else:
+                        st.info("ℹ️ Select a country to see pricing parameters")
                     
-                    if budget_ready:
+                # Calculate Budget Button (outside columns, full width)
+            budget_ready = target_km > 0 and dax_number > 0 and selected_budget_country
+                    
+            if budget_ready:
                         calculate_budget = st.button(
                             "💰 Calculate Budget", 
                             type="primary",
                             use_container_width=True,
                             key="calculate_budget_btn"
                         )
-                    else:
+            else:
                         st.button(
                             "💰 Calculate Budget", 
                             type="primary",
@@ -1782,76 +2138,149 @@ def streamlit_complete_workflow_ui():
                         )
                         calculate_budget = False
                 
-                # Show validation warnings below columns
-                if not budget_ready:
-                    if target_km <= 0:
+                # Show validation warnings outside the country selection
+            if target_km <= 0:
                         st.warning("⚠️ Target KM must be > 0")
-                    if dax_number <= 0:
+            if dax_number <= 0:
                         st.warning("⚠️ DAX count must be > 0") 
-                    if not selected_budget_country:
+            if not selected_budget_country:
                         st.warning("⚠️ Select a country")
                 
-                # Handle budget calculation
-                if calculate_budget and selected_budget_country:
+                        # Handle budget calculation
+            if selected_budget_country and calculate_budget:
                     try:
-                        # Get selected country data
+                        # Get country data and input values
                         country_data = country_dict[selected_budget_country]
+                        currency = country_data.get('currency', 'USD') or 'USD'
+                        currency_symbol = country_data.get('currency_symbol', '$') or '$'
                         
-                        # Calculate forecast budget
-                        budget_result = forecast_budget_simple(target_km, dax_number, country_data)
+                        # Get current values from session state or use defaults
+                        # This ensures we have the values even if they were set in the columns
+                        country_name = country_data.get('name', '').lower()
+                        
+                        # Indonesia-specific defaults
+                        if 'indonesia' in country_name:
+                            fallback_ukm = 8000.0
+                            fallback_insurance = 132200.0
+                            fallback_dataplan = 400000.0
+                        else:
+                            # Generic defaults for other countries
+                            fallback_ukm = 0.25
+                            fallback_insurance = 8.5
+                            fallback_dataplan = 30.0
+                        
+                        default_ukm_price = country_data.get('ukm_price', fallback_ukm) or fallback_ukm
+                        default_insurance = country_data.get('insurance', fallback_insurance) or fallback_insurance
+                        default_dataplan = country_data.get('dataplan', fallback_dataplan) or fallback_dataplan
+                        
+                        # Prepare custom parameters with user inputs
+                        custom_params = {
+                            'ukm_price': st.session_state.get('predefined_ukm_price', default_ukm_price),
+                            'insurance_rate': st.session_state.get('predefined_insurance', default_insurance),
+                            'dataplan_rate': st.session_state.get('predefined_dataplan', default_dataplan),
+                            'currency': currency,
+                            'currency_symbol': currency_symbol,
+                            'exchange_rate_to_usd': country_data.get('exchange_rate_to_usd', 1.0) or 1.0,
+                            'country_name': selected_budget_country,
+                            'custom_basic_incentive': None  # Let it auto-calculate from target_km * ukm_price
+                        }
+                        
+                        # Calculate forecast budget using custom function to handle user inputs
+                        budget_result = forecast_budget_custom(target_km, dax_number, custom_params)
                         
                         # Add calculation parameters to result
                         budget_result['target_km_input'] = target_km
                         budget_result['dax_number_input'] = dax_number
+                        budget_result['calculation_mode'] = 'predefined_with_custom'
                         
                         # Store in session state
                         st.session_state.budget_result = budget_result
                         
-                        st.success("✅ Budget calculated!")
+                        st.success("✅ Budget Calculated!")
                         
                     except Exception as e:
                         st.error(f"❌ Error: {str(e)}")
-                
-                # Display budget result if available
-                if (hasattr(st.session_state, 'budget_result') and 
-                    st.session_state.budget_result):
-                    
-                    budget_result = st.session_state.budget_result
-                    
-                    # Display country and currency info
-                    currency = budget_result['Currency']
-                    symbol = budget_result['Symbol']
-                    
-                    st.markdown("<br>", unsafe_allow_html=True)  # Small spacing
-                    # Budget breakdown with more compact format
-                    st.markdown("**💰 Budget Breakdown:**")
-                    breakdown_items = [
-                        ("Duration", f"{budget_result['Month Estimation']} months"),
-                        ("Basic Incentive", format_currency(budget_result['Basic Incentive'], currency, symbol)),
-                        (">95% Bonus", format_currency(budget_result['>95% Bonus Coverage'], currency, symbol)),
-                        ("Insurance", format_currency(budget_result['Insurance'], currency, symbol)),
-                        ("Data Plan", format_currency(budget_result['Dataplan'], currency, symbol)),
-                        ("Misc (5%)", format_currency(budget_result['Miscellaneous (5%)'], currency, symbol))
-                    ]
-                    
-                    for item, value in breakdown_items:
-                        st.write(f"• **{item}**: {value}")
-                    
-                    total_local = format_currency(budget_result['Total Forecast Budget'], currency, symbol)
-                    total_usd = f"${budget_result['Total Forecast Budget (USD)']:,.2f}"
-                    
-                    st.success(f"""
-                    **💵 Total Budget:**  
-                    **{total_local}**  
-                    **{total_usd} USD**
-                    """)
-                       
+                            
             else:
-                st.error("❌ Unable to load pricing data")
+                st.error("❌ Unable to load predefined pricing data")
                 
         except Exception as e:
             st.error(f"❌ Error loading budget calculator: {str(e)}")
         
+        # Display budget result if available
+        if (hasattr(st.session_state, 'budget_result') and 
+            st.session_state.budget_result):
+            
+            budget_result = st.session_state.budget_result
+            
+            # Display country and currency info
+            currency = budget_result['Currency']
+            symbol = budget_result['Symbol']
+            
+            # Create budget breakdown table
+            breakdown_data = {
+                "Budget Component": [
+                    "Estimated Collection Period",
+                    "Basic Incentive", 
+                    ">95% Bonus Coverage",
+                    "Insurance",
+                    "Data Plan",
+                    "Miscellaneous (5%)",
+                    "TOTAL BUDGET"
+                ],
+                "Amount": [
+                    f"{budget_result['Month Estimation']} months",
+                    format_currency(budget_result['Basic Incentive'], currency, symbol),
+                    format_currency(budget_result['>95% Bonus Coverage'], currency, symbol),
+                    format_currency(budget_result['Insurance'], currency, symbol),
+                    format_currency(budget_result['Dataplan'], currency, symbol),
+                    format_currency(budget_result['Miscellaneous (5%)'], currency, symbol),
+                    f"{format_currency(budget_result['Total Forecast Budget'], currency, symbol)}"
+                ]
+            }
+            
+            # Display as table with borders
+            breakdown_df = pd.DataFrame(breakdown_data)
+            
+            # Add CSS styling for table borders
+            st.markdown("""
+            <style>
+            .budget-table table {
+                border-collapse: collapse;
+                width: 100%;
+                margin: 0 auto;
+            }
+            .budget-table th, .budget-table td {
+                border: 1px solid #ddd;
+                padding: 12px;
+                text-align: left;
+            }
+            .budget-table th {
+                background-color: #f8f9fa;
+                font-weight: bold;
+            }
+            .budget-table tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+            .budget-table tr:hover {
+                background-color: #f5f5f5;
+            }
+            .budget-table tr:last-child {
+                font-weight: bold;
+                background-color: #e8f5e8;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # Convert DataFrame to HTML with custom styling
+            table_html = breakdown_df.to_html(index=False, escape=False, classes='budget-table')
+            st.markdown(f'<div class="budget-table">{table_html}</div>', unsafe_allow_html=True)
+            
+            # Display USD equivalent
+            total_usd = f"${budget_result['Total Forecast Budget (USD)']:,.2f}"
+            st.info(f"💱 **USD Equivalent:** {total_usd}")
+            
+           
         # Download options - closer spacing
         st.markdown("<br>", unsafe_allow_html=True)  # Small spacing instead of full divider
         st.subheader("📥 Download Results")
