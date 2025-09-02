@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 import geohash2
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box, shape
 import geopandas as gpd
 from io import StringIO
 import tempfile
@@ -703,73 +703,180 @@ def geohash_to_polygon(gh):
         (lon_min, lat_min)
     ])
 
-# API Helper Functions for Boundary to GeoHash conversion
+# Local Helper Functions for Boundary to GeoHash conversion
 def convert_boundary_to_geohash(boundary_geojson, precision_level):
-    """Convert boundary to geohash with specified precision level using API"""
+    """Convert boundary to geohash with specified precision level (local implementation)"""
     try:
-        # Prepare the geometry for API - extract first feature's geometry if it's a FeatureCollection
+        # Prepare the geometry - extract first feature's geometry if it's a FeatureCollection
         if boundary_geojson.get("type") == "FeatureCollection" and boundary_geojson.get("features"):
-            geometry_to_send = boundary_geojson["features"][0]["geometry"]
+            geometry_data = boundary_geojson["features"][0]["geometry"]
         elif boundary_geojson.get("type") == "Feature":
-            geometry_to_send = boundary_geojson["geometry"]
+            geometry_data = boundary_geojson["geometry"]
         else:
-            geometry_to_send = boundary_geojson
+            geometry_data = boundary_geojson
         
-        payload = {
-            "boundary_geojson": geometry_to_send,
-            "precision": precision_level
+        # Convert to shapely geometry
+        boundary_geom = shape(geometry_data)
+        
+        # Get bounding box
+        minx, miny, maxx, maxy = boundary_geom.bounds
+        
+        # Generate geohash grid
+        # Use set to track unique geohashes and avoid duplicates
+        unique_geohashes = set()
+        geohash_features = []
+        
+        # Calculate step size based on precision (more conservative to ensure coverage)
+        lat_step = 0.008 if precision_level == 5 else 0.003 if precision_level == 6 else 0.001
+        lon_step = 0.008 if precision_level == 5 else 0.003 if precision_level == 6 else 0.001
+        
+        # Generate grid points
+        current_lat = miny
+        while current_lat <= maxy:
+            current_lon = minx
+            while current_lon <= maxx:
+                # Create point and get geohash
+                point_geohash = geohash2.encode(current_lat, current_lon, precision_level)
+                
+                # Skip if this geohash already processed
+                if point_geohash in unique_geohashes:
+                    current_lon += lon_step
+                    continue
+                
+                # Decode back to get the geohash polygon bounds
+                decoded_lat, decoded_lon, lat_err, lon_err = geohash2.decode_exactly(point_geohash)
+                
+                # Create geohash bounding box
+                geohash_box = box(
+                    decoded_lon - lon_err, decoded_lat - lat_err,
+                    decoded_lon + lon_err, decoded_lat + lat_err
+                )
+                
+                # Check if geohash intersects with boundary
+                if boundary_geom.intersects(geohash_box):
+                    # Add to unique set
+                    unique_geohashes.add(point_geohash)
+                    
+                    # Calculate center point
+                    center_lat = decoded_lat
+                    center_lon = decoded_lon
+                    
+                    geohash_features.append({
+                        "type": "Feature",
+                        "properties": {
+                            "geoHash": point_geohash,
+                            "center_lat": center_lat,
+                            "center_lon": center_lon
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [decoded_lon - lon_err, decoded_lat - lat_err],
+                                [decoded_lon + lon_err, decoded_lat - lat_err],
+                                [decoded_lon + lon_err, decoded_lat + lat_err],
+                                [decoded_lon - lon_err, decoded_lat + lat_err],
+                                [decoded_lon - lon_err, decoded_lat - lat_err]
+                            ]]
+                        }
+                    })
+                
+                current_lon += lon_step
+            current_lat += lat_step
+        
+        # Create GeoJSON FeatureCollection
+        result = {
+            "type": "FeatureCollection",
+            "features": geohash_features
         }
         
-        response = requests.post(f"{API_BASE_URL}/geospatial/boundary-to-geohash", json=payload)
+        return {
+            "success": True,
+            "geohash_count": len(unique_geohashes),
+            "precision": precision_level,
+            "geohashes_geojson": result
+        }
         
-        if response.status_code == 200:
-            return response.json()
-        else:
-            # Try to get error details
-            try:
-                error_detail = response.json()
-                st.error(f"Failed to convert to geohash: {response.status_code}")
-                st.error(f"Error details: {error_detail}")
-            except:
-                st.error(f"Failed to convert to geohash: {response.status_code}")
-                st.error(f"Raw response: {response.text}")
-            return None
     except Exception as e:
         st.error(f"Error converting to geohash: {str(e)}")
         return None
 
 def geohash_result_to_csv(geohash_result):
-    """Convert geohash API result to CSV format using API"""
+    """Convert geohash result to CSV format (local implementation)"""
     try:
         if not geohash_result or not geohash_result.get("geohashes_geojson"):
             return ""
         
-        payload = {"geohashes_geojson": geohash_result["geohashes_geojson"]}
-        response = requests.post(f"{API_BASE_URL}/geospatial/geohash-to-csv", json=payload)
+        geohashes_geojson = geohash_result["geohashes_geojson"]
         
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success"):
-                return result.get("csv_data", "")
-        return ""
+        if not geohashes_geojson or not geohashes_geojson.get("features"):
+            return ""
+        
+        rows = []
+        for feature in geohashes_geojson["features"]:
+            props = feature.get("properties", {})
+            rows.append({
+                "geohash": props.get("geoHash", ""),
+                "lat": props.get("center_lat", ""),
+                "lon": props.get("center_lon", "")
+            })
+        
+        if rows:
+            df = pd.DataFrame(rows)
+            return df.to_csv(index=False)
+        else:
+            return ""
+            
     except Exception as e:
         st.error(f"Error converting to CSV: {str(e)}")
         return ""
 
 def get_bounds_from_geojson(geojson):
-    """Calculate bounds from GeoJSON for map fitting using API"""
+    """Calculate bounds from GeoJSON for map fitting (local implementation)"""
     try:
-        if not geojson or not geojson.get('features'):
+        if not geojson:
             return None
         
-        payload = {"geojson": geojson}
-        response = requests.post(f"{API_BASE_URL}/geospatial/get-bounds", json=payload)
+        # Handle different GeoJSON types
+        if geojson.get('type') == 'FeatureCollection' and geojson.get('features'):
+            features = geojson['features']
+        elif geojson.get('type') == 'Feature':
+            features = [geojson]
+        else:
+            # Assume it's a geometry object
+            features = [{"type": "Feature", "geometry": geojson, "properties": {}}]
         
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success"):
-                return result.get("bounds")
-        return None
+        if not features:
+            return None
+        
+        # Initialize bounds with first feature
+        min_lon = float('inf')
+        min_lat = float('inf')
+        max_lon = float('-inf')
+        max_lat = float('-inf')
+        
+        # Calculate bounds from all features
+        for feature in features:
+            geometry = feature.get('geometry')
+            if not geometry:
+                continue
+            
+            # Use shapely to get bounds
+            geom = shape(geometry)
+            bounds = geom.bounds  # (minx, miny, maxx, maxy)
+            
+            min_lon = min(min_lon, bounds[0])
+            min_lat = min(min_lat, bounds[1])
+            max_lon = max(max_lon, bounds[2])
+            max_lat = max(max_lat, bounds[3])
+        
+        # Check if we found valid bounds
+        if min_lon == float('inf') or min_lat == float('inf'):
+            return None
+        
+        # Return bounds in the format expected by the map
+        # [[min_lat, min_lon], [max_lat, max_lon]]
+        return [[min_lat, min_lon], [max_lat, max_lon]]
+        
     except Exception as e:
         st.error(f"Error calculating bounds: {str(e)}")
         return None
@@ -866,15 +973,8 @@ if 'generated_geohash' not in st.session_state:
 if 'precision_level' not in st.session_state:
     st.session_state.precision_level = 6
 
-# Check API health
-try:
-    health_response = requests.get(f"{API_BASE_URL}/geospatial/health", timeout=5)
-    api_available = health_response.status_code == 200
-except:
-    api_available = False
-
-if not api_available:
-    st.warning("⚠️ API server is not available. Some features may not work.")
+# No API needed - all functions work locally
+api_available = True
 
 # File upload section
 uploaded_boundary_file = st.file_uploader(
@@ -930,8 +1030,7 @@ if st.session_state.boundary_geojson:
         # Store in session state
         st.session_state.precision_level = precision_level
     
-        if st.button("Convert to GeoHash", type="primary", disabled=not api_available):
-            if api_available:
+        if st.button("Convert to GeoHash", type="primary"):
                 with st.spinner(f"Converting boundary to GeoHash Level {precision_level}..."):
                     geohash_result = convert_boundary_to_geohash(st.session_state.boundary_geojson, precision_level)
                     
@@ -998,7 +1097,6 @@ if st.session_state.generated_geohash:
     
     with col2:
         # Download CSV
-        if api_available:
             csv_data = geohash_result_to_csv(geohash_result)
             if csv_data:
                 filename_csv = f"{boundary_filename}_geohash_level_{st.session_state.precision_level}.csv"
@@ -1012,8 +1110,6 @@ if st.session_state.generated_geohash:
                 )
             else:
                 st.error("❌ Failed to generate CSV data")
-        else:
-            st.warning("⚠️ CSV download not available without API")
 
 st.markdown("---")
 
