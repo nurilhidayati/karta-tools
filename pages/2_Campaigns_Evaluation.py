@@ -1019,6 +1019,168 @@ st.markdown("""
         background-color: #2196F3 !important;
         color: #FFFFFF !important;
     }
+    
+    /* MULTISELECT SPECIFIC FORCING - WHITE BACKGROUND BLACK TEXT */
+    /* Target all multiselect containers */
+    .stMultiSelect {
+        background-color: #FFFFFF !important;
+    }
+    
+    .stMultiSelect > div {
+        background-color: #FFFFFF !important;
+    }
+    
+    .stMultiSelect > div > div {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Target multiselect control */
+    div[data-testid="stMultiSelect"] {
+        background-color: #FFFFFF !important;
+    }
+    
+    div[data-testid="stMultiSelect"] > div {
+        background-color: #FFFFFF !important;
+    }
+    
+    div[data-testid="stMultiSelect"] > div > div {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Multiselect input control */
+    div[data-testid="stMultiSelect"] div[data-baseweb="select"] {
+        background-color: #FFFFFF !important;
+    }
+    
+    div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Multiselect selected values/tags */
+    div[data-testid="stMultiSelect"] span {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    div[data-testid="stMultiSelect"] div[role="button"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Multiselect selected tag styling */
+    .stMultiSelect div[data-baseweb="tag"] {
+        background-color: #E3F2FD !important;
+        color: #000000 !important;
+        border: 1px solid #2196F3 !important;
+    }
+    
+    div[data-testid="stMultiSelect"] div[data-baseweb="tag"] {
+        background-color: #E3F2FD !important;
+        color: #000000 !important;
+        border: 1px solid #2196F3 !important;
+    }
+    
+    /* Multiselect tag text */
+    .stMultiSelect div[data-baseweb="tag"] span {
+        color: #000000 !important;
+    }
+    
+    div[data-testid="stMultiSelect"] div[data-baseweb="tag"] span {
+        color: #000000 !important;
+    }
+    
+    /* Multiselect dropdown placeholder */
+    div[data-testid="stMultiSelect"] div[class*="placeholder"] {
+        color: #000000 !important;
+    }
+    
+    /* Force all multiselect related elements to white background */
+    .stMultiSelect * {
+        background-color: #FFFFFF !important;
+    }
+    
+    div[data-testid="stMultiSelect"] * {
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Exception for selected tags - keep light blue background */
+    .stMultiSelect div[data-baseweb="tag"],
+    div[data-testid="stMultiSelect"] div[data-baseweb="tag"] {
+        background-color: #E3F2FD !important;
+    }
+    
+    /* Multiselect control states */
+    .stMultiSelect div[data-baseweb="select"][aria-expanded="true"] {
+        background-color: #FFFFFF !important;
+    }
+    
+    div[data-testid="stMultiSelect"] div[data-baseweb="select"][aria-expanded="true"] {
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Multiselect input field */
+    .stMultiSelect input {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    div[data-testid="stMultiSelect"] input {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Nuclear option for multiselect - override everything */
+    [data-testid="stMultiSelect"] {
+        background-color: #FFFFFF !important;
+    }
+    
+    [data-testid="stMultiSelect"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Exception for tags */
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+        background-color: #E3F2FD !important;
+        color: #000000 !important;
+    }
+    
+    /* Multiselect label */
+    .stMultiSelect label {
+        color: #000000 !important;
+    }
+    
+    div[data-testid="stMultiSelect"] + div label {
+        color: #000000 !important;
+    }
+    
+    /* Additional multiselect control selectors */
+    .css-1wa3eu0-placeholder {
+        color: #666666 !important;
+    }
+    
+    .css-1uccc91-singleValue {
+        color: #000000 !important;
+    }
+    
+    /* Target all possible multiselect CSS classes */
+    [class*="css-"][class*="multi"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    [class*="css-"][class*="control"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    [class*="css-"][class*="value"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1381,11 +1543,12 @@ def convert_csv_to_geojson(df):
     gdf_singlepart = gdf_roads.explode(index_parts=False).reset_index(drop=True)
     return gdf_singlepart
 
-def download_restricted_areas(polygon):
+def download_restricted_areas(polygon, selected_restrictions=None):
     """Download restricted areas using optimized OSM queries with proper error handling and caching"""
     
-    # Generate cache key for this polygon
-    cache_key = generate_cache_key(polygon, "restricted_areas")
+    # Generate cache key for this polygon (include restrictions in cache key)
+    restrictions_key = "_".join(sorted(selected_restrictions)) if selected_restrictions else "all"
+    cache_key = generate_cache_key(polygon, f"restricted_areas_{restrictions_key}")
     
     # Try to load from cache first
     if is_cache_valid(cache_key, "restricted_areas", max_age_hours=24):
@@ -1397,39 +1560,58 @@ def download_restricted_areas(polygon):
         # Split into smaller, more targeted queries to avoid timeout
         all_features = []
         
-        # Query 1: High priority restrictions (military, government)
-        high_priority_tags = {
-            "landuse": ["military", "government"],
-            "amenity": ["police", "prison", "fire_station"],
-            "building": ["military", "government"]
-        }
-        
-        # Query 2: Institutional areas
-        institutional_tags = {
-            "amenity": ["school", "college", "university", "hospital", "kindergarten"],
-            "building": ["school", "university", "hospital"]
-        }
-        
-        # Query 3: Industrial and commercial
-        industrial_tags = {
-            "landuse": ["industrial", "commercial", "cemetery", "landfill"],
+        # Map selected restrictions to OSM tags
+        restriction_mapping = {
+            "Military Areas": {
+                "landuse": ["military"],
+                "building": ["military"]
+            },
+            "Government Buildings": {
+                "landuse": ["government"],
+                "amenity": ["government"],
+                "building": ["government"]
+            },
+            "Police Stations": {
+                "amenity": ["police", "prison", "fire_station"]
+            },
+            "Educational Institutions": {
+                "amenity": ["school", "college", "university", "kindergarten"],
+                "building": ["school", "university"]
+            },
+            "Healthcare Facilities": {
+                "amenity": ["hospital", "clinic"],
+                "building": ["hospital"]
+            },
+            "Industrial Zones": {
+                "landuse": ["industrial", "commercial"],
             "building": ["warehouse", "industrial"]
-        }
-        
-        # Query 4: Protected and recreational areas
-        protected_tags = {
-            "leisure": ["nature_reserve", "golf_course"],
-            "boundary": ["protected_area"],
+            },
+            "Environmental/Protected Areas": {
+                "landuse": ["cemetery", "landfill"],
+                "leisure": ["nature_reserve"],
+                "boundary": ["protected_area"]
+            },
+            "Transportation Hubs": {
             "aeroway": ["aerodrome", "airport"]
-        }
-        
-        # Query 5: Access barriers
-        barrier_tags = {
+            },
+            "Recreational Areas": {
+                "leisure": ["golf_course", "sports"]
+            },
+            "Infrastructure Barriers": {
             "barrier": ["fence", "wall", "gate", "bollard"],
             "access": ["private", "no"]
+            }
         }
         
-        tag_groups = [high_priority_tags, institutional_tags, industrial_tags, protected_tags, barrier_tags]
+        # Build tag groups based on selected restrictions
+        tag_groups = []
+        if selected_restrictions:
+            for restriction in selected_restrictions:
+                if restriction in restriction_mapping:
+                    tag_groups.append(restriction_mapping[restriction])
+        else:
+            # If no restrictions selected, use all
+            tag_groups = list(restriction_mapping.values())
         
         for i, tags in enumerate(tag_groups):
             try:
@@ -1484,11 +1666,12 @@ def download_restricted_areas(polygon):
         st.warning(f"Error downloading restricted areas: {e}")
         return gpd.GeoDataFrame()
 
-def download_restricted_roads(polygon):
+def download_restricted_roads(polygon, selected_restrictions=None):
     """Download restricted roads using optimized OSM queries with proper error handling and caching"""
     
-    # Generate cache key for this polygon
-    cache_key = generate_cache_key(polygon, "restricted_roads")
+    # Generate cache key for this polygon (include restrictions in cache key)
+    restrictions_key = "_".join(sorted(selected_restrictions)) if selected_restrictions else "all"
+    cache_key = generate_cache_key(polygon, f"restricted_roads_{restrictions_key}")
     
     # Try to load from cache first
     if is_cache_valid(cache_key, "restricted_roads", max_age_hours=24):
@@ -1501,27 +1684,41 @@ def download_restricted_roads(polygon):
         # Split into targeted queries to avoid timeout and get better coverage
         all_road_features = []
         
-        # Query 1: Service and access roads
-        service_tags = {
-            "highway": ["service", "unclassified", "track", "path"],
-            "service": ["driveway", "alley", "emergency_access", "parking_aisle"]
-        }
-        
-        # Query 2: Access restrictions
-        access_tags = {
+        # Map selected road restrictions to OSM tags
+        road_restriction_mapping = {
+            "Access Restricted Roads": {
             "access": ["private", "customers", "permit", "military", "no", "restricted"],
             "motor_vehicle": ["no", "private", "permit"],
             "motorcycle": ["no", "private", "permit"]
+            },
+            "Service Roads": {
+                "highway": ["service"],
+                "service": ["driveway", "alley", "emergency_access", "parking_aisle"]
+            },
+            "Vehicle Specific Restrictions": {
+                "motor_vehicle": ["no", "private", "permit"],
+                "motorcycle": ["no", "private", "permit"],
+                "bicycle": ["no", "private"]
+            },
+            "Unclassified Road Types": {
+                "highway": ["unclassified", "track", "path", "footway", "proposed"]
+            },
+            "Military/Security Roads": {
+                "access": ["military", "restricted"],
+                "highway": ["private"],
+                "barrier": ["gate", "bollard", "lift_gate"]
+            }
         }
         
-        # Query 3: Private and gated roads
-        private_tags = {
-            "highway": ["private", "proposed"],
-            "barrier": ["gate", "bollard", "lift_gate"],
-            "foot": ["private", "no"]
-        }
-        
-        tag_groups = [service_tags, access_tags, private_tags]
+        # Build tag groups based on selected restrictions
+        tag_groups = []
+        if selected_restrictions:
+            for restriction in selected_restrictions:
+                if restriction in road_restriction_mapping:
+                    tag_groups.append(road_restriction_mapping[restriction])
+        else:
+            # If no restrictions selected, use all
+            tag_groups = list(road_restriction_mapping.values())
         
         for i, tags in enumerate(tag_groups):
             try:
@@ -2063,35 +2260,111 @@ uploaded_file = st.file_uploader("📂 Upload a CSV report from DAX listing road
 # Fixed configuration values
 distance_buffer = 100  # Fixed buffer distance in meters
 
+# Initialize restriction variables with defaults
+selected_area_restrictions = []
+selected_road_restrictions = []
 
-
-# Check conditions for enabling the button
+# Show Select Parameters section only if campaign is selected and file is uploaded
 campaign_selected = (st.session_state.selected_campaign_id is not None and 
                     st.session_state.campaign_details is not None)
 file_uploaded = uploaded_file is not None
+
+if campaign_selected and file_uploaded:
+    # Restriction Parameters Configuration
+    st.header("Select Parameters")
+
+    # Define available restriction types
+    AREA_RESTRICTION_OPTIONS = [
+        "Military Areas",
+        "Government Buildings", 
+        "Police Stations",
+        "Educational Institutions",
+        "Healthcare Facilities",
+        "Industrial Zones",
+        "Environmental/Protected Areas",
+        "Transportation Hubs",
+        "Recreational Areas",
+        "Infrastructure Barriers"
+    ]
+
+    ROAD_RESTRICTION_OPTIONS = [
+        "Access Restricted Roads",
+        "Service Roads", 
+        "Vehicle Specific Restrictions",
+        "Unclassified Road Types",
+        "Military/Security Roads"
+    ]
+
+    # Area restrictions multiselect
+    selected_area_restrictions = st.multiselect(
+        "🏢 Select Area Restriction Types to Include:",
+        options=AREA_RESTRICTION_OPTIONS,
+        default=AREA_RESTRICTION_OPTIONS,  # All selected by default
+        help="Choose which types of restricted areas to include in the gap analysis"
+    )
+
+    # Road restrictions multiselect  
+    selected_road_restrictions = st.multiselect(
+        "🛣️ Select Road Restriction Types to Include:",
+        options=ROAD_RESTRICTION_OPTIONS,
+        default=ROAD_RESTRICTION_OPTIONS,  # All selected by default
+        help="Choose which types of restricted roads to include in the gap analysis"
+    )
+else:
+    # Set default values when parameters section is not shown
+    AREA_RESTRICTION_OPTIONS = [
+        "Military Areas",
+        "Government Buildings", 
+        "Police Stations",
+        "Educational Institutions",
+        "Healthcare Facilities",
+        "Industrial Zones",
+        "Environmental/Protected Areas",
+        "Transportation Hubs",
+        "Recreational Areas",
+        "Infrastructure Barriers"
+    ]
+
+    ROAD_RESTRICTION_OPTIONS = [
+        "Access Restricted Roads",
+        "Service Roads", 
+        "Vehicle Specific Restrictions",
+        "Unclassified Road Types",
+        "Military/Security Roads"
+    ]
+    
+    selected_area_restrictions = AREA_RESTRICTION_OPTIONS  # All selected by default
+    selected_road_restrictions = ROAD_RESTRICTION_OPTIONS  # All selected by default
+
+
+
+# Check conditions for enabling the button
+# campaign_selected and file_uploaded already defined above
+restrictions_selected = (len(selected_area_restrictions) > 0 or len(selected_road_restrictions) > 0)
 is_processing = st.session_state.get('is_processing_analysis', False)
 
 # Show button with appropriate state
 if is_processing:
     st.button('🔄 Processing Analysis...', type='secondary', disabled=True, use_container_width=True)
     analysis_clicked = False
-elif not campaign_selected and not file_uploaded:
+elif not campaign_selected and not file_uploaded and not restrictions_selected:
     st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-  
     analysis_clicked = False
 elif not campaign_selected:
     st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-   
+  
     analysis_clicked = False
 elif not file_uploaded:
     st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
-   
+    analysis_clicked = False
+elif not restrictions_selected:
+    st.button('UKM Gap Analysis', type='primary', disabled=True, use_container_width=True)
     analysis_clicked = False
 else:
     analysis_clicked = st.button('UKM Gap Analysis', type='primary', use_container_width=True)
 
 # Main processing logic
-if analysis_clicked and campaign_selected and file_uploaded:
+if analysis_clicked and campaign_selected and file_uploaded and restrictions_selected:
     st.session_state.analysis_completed = False
     st.session_state.is_processing_analysis = True
     
@@ -2152,9 +2425,9 @@ if analysis_clicked and campaign_selected and file_uploaded:
             geohash = generate_geohash(lat, lon, precision=5)
             unique_geohashes.add(geohash)
         
-        # Download restrictions
-        st.session_state.restricted_areas_gdf = download_restricted_areas(analysis_polygon)
-        st.session_state.restricted_roads_gdf = download_restricted_roads(analysis_polygon)
+        # Download restrictions with selected parameters
+        st.session_state.restricted_areas_gdf = download_restricted_areas(analysis_polygon, selected_area_restrictions)
+        st.session_state.restricted_roads_gdf = download_restricted_roads(analysis_polygon, selected_road_restrictions)
         
         areas_count = len(st.session_state.restricted_areas_gdf) if st.session_state.restricted_areas_gdf is not None else 0
         roads_restricted_count = len(st.session_state.restricted_roads_gdf) if st.session_state.restricted_roads_gdf is not None else 0

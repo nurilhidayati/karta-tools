@@ -8,9 +8,84 @@ from config import settings
 import folium
 from streamlit_folium import st_folium
 import math
+import geohash2 as geohash
+from shapely.geometry import box, shape, Polygon
+import logging
+import osmnx as ox
+from collections import Counter
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
+from functools import lru_cache
 
 # API Configuration
 API_BASE_URL = f"http://{settings.API_HOST}:{settings.API_PORT}/api/v1"
+
+# Local cache for OSM data
+osm_cache = {}
+osm_cache_with_ttl = {}
+CACHE_TTL = 3600  # 1 hour cache
+
+# Helper functions extracted from geospatial API
+
+@lru_cache(maxsize=1000)
+def cached_geohash_encode(lat: float, lon: float, precision: int) -> str:
+    """Cached geohash encoding for better performance"""
+    return geohash.encode(lat, lon, precision=precision)
+
+@lru_cache(maxsize=1000) 
+def cached_geohash_to_polygon(geohash_str: str):
+    """Cached geohash to polygon conversion"""
+    lat, lon, lat_err, lon_err = geohash.decode_exactly(geohash_str)
+    return Polygon([
+        (lon - lon_err, lat - lat_err),
+        (lon - lon_err, lat + lat_err),
+        (lon + lon_err, lat + lat_err),
+        (lon + lon_err, lat - lat_err),
+        (lon - lon_err, lat - lat_err)
+    ])
+
+def encode_geohash_batch(geometries, precision):
+    """Vectorized geohash encoding for better performance"""
+    geohashes = []
+    for geom in geometries:
+        try:
+            if geom.is_empty:
+                geohashes.append(None)
+                continue
+            if geom.geom_type == 'Point':
+                point = geom
+            else:
+                point = geom.representative_point()
+            geohashes.append(cached_geohash_encode(point.y, point.x, precision))
+        except:
+            geohashes.append(None)
+    return geohashes
+
+def fetch_poi_data(polygon, tags_dict):
+    """Fetch POI data from OSM"""
+    try:
+        poi_gdf = ox.geometries_from_polygon(polygon, tags=tags_dict)
+        poi_gdf = poi_gdf[poi_gdf.geometry.type.isin(['Point', 'Polygon', 'MultiPolygon'])]
+        return poi_gdf.to_crs("EPSG:4326")
+    except Exception as e:
+        st.warning(f"⚠️ Failed to fetch POI: {e}")
+        return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+
+def fetch_road_data(polygon, road_tags):
+    """Fetch road data from OSM"""
+    try:
+        roads_gdf = ox.geometries_from_polygon(polygon, tags=road_tags)
+        roads_gdf = roads_gdf[roads_gdf.geometry.type.isin(['LineString', 'MultiLineString'])]
+        return roads_gdf.to_crs("EPSG:4326")
+    except Exception as e:
+        st.warning(f"⚠️ Failed to fetch major roads: {e}")
+        return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+
+def geohash_to_bounds(gh):
+    """Convert geohash to bounding box coordinates"""
+    lat, lon, lat_err, lon_err = geohash.decode_exactly(gh)
+    return (lat - lat_err, lat + lat_err, lon - lon_err, lon + lon_err)
 
 # CSS for styling
 st.markdown("""
@@ -218,149 +293,437 @@ def process_complete_geohash_workflow(
 # Helper functions from the original files
 
 def extract_geojson_from_boundary_data(boundary_data):
-    """Extract GeoJSON from boundary data response using API"""
+    """Extract GeoJSON from boundary data (now works with local file data)"""
     try:
-        payload = {"boundary_data": boundary_data}
-        response = requests.post(f"{API_BASE_URL}/geospatial/extract-geojson", json=payload)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success"):
-                return result.get("geojson")
-        return None
+        # Check if we have rows data (from local file)
+        if boundary_data and boundary_data.get("rows"):
+            rows = boundary_data["rows"]
+            
+            # If we only have one row (selected region), extract its geometry
+            if len(rows) == 1:
+                row = rows[0]
+                geometry = row.get("geometry")
+                
+                if geometry:
+                    # Create a proper GeoJSON Feature
+                    geojson = {
+                        "type": "Feature",
+                        "properties": {
+                            "id": row.get("id"),
+                            "NAME": row.get("NAME"),
+                            "TYPE": row.get("TYPE")
+                        },
+                        "geometry": geometry
+                    }
+                    return geojson
+                else:
+                    st.error("❌ No geometry found in boundary data")
+                    return None
+            else:
+                # Multiple rows - create FeatureCollection
+                features = []
+                for row in rows:
+                    geometry = row.get("geometry")
+                    if geometry:
+                        feature = {
+                            "type": "Feature",
+                            "properties": {
+                                "id": row.get("id"),
+                                "NAME": row.get("NAME"),
+                                "TYPE": row.get("TYPE")
+                            },
+                            "geometry": geometry
+                        }
+                        features.append(feature)
+                
+                if features:
+                    geojson = {
+                        "type": "FeatureCollection",
+                        "features": features
+                    }
+                    return geojson
+                else:
+                    st.error("❌ No valid geometries found in boundary data")
+                    return None
+        else:
+            # Fallback: try API method if boundary_data doesn't have the expected format
+            payload = {"boundary_data": boundary_data}
+            response = requests.post(f"{API_BASE_URL}/geospatial/extract-geojson", json=payload)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    return result.get("geojson")
+            return None
+            
     except Exception as e:
         st.error(f"Error extracting GeoJSON: {str(e)}")
         return None
 
 def convert_boundary_to_geohash6(boundary_geojson, precision=6):
-    """Convert boundary to geohash6 using API"""
+    """Convert boundary to geohash grid (local implementation)"""
     try:
-        # Prepare the geometry for API
+        # Prepare the geometry
         if boundary_geojson.get("type") == "FeatureCollection" and boundary_geojson.get("features"):
-            geometry_to_send = boundary_geojson["features"][0]["geometry"]
+            geometry_data = boundary_geojson["features"][0]["geometry"]
         elif boundary_geojson.get("type") == "Feature":
-            geometry_to_send = boundary_geojson["geometry"]
+            geometry_data = boundary_geojson["geometry"]
         else:
-            geometry_to_send = boundary_geojson
+            geometry_data = boundary_geojson
         
-        payload = {
-            "boundary_geojson": geometry_to_send,
-            "precision": precision
+        # Convert to shapely geometry
+        boundary_geom = shape(geometry_data)
+        
+        # Get bounding box
+        minx, miny, maxx, maxy = boundary_geom.bounds
+        
+        # Generate geohash grid
+        # Use set to track unique geohashes and avoid duplicates
+        unique_geohashes = set()
+        geohash_features = []
+        
+        # Calculate step size based on precision (more conservative to ensure coverage)
+        lat_step = 0.008 if precision == 5 else 0.003 if precision == 6 else 0.001
+        lon_step = 0.008 if precision == 5 else 0.003 if precision == 6 else 0.001
+        
+        # Generate grid points
+        current_lat = miny
+        while current_lat <= maxy:
+            current_lon = minx
+            while current_lon <= maxx:
+                # Create point and get geohash
+                point_geohash = geohash.encode(current_lat, current_lon, precision)
+                
+                # Skip if this geohash already processed
+                if point_geohash in unique_geohashes:
+                    current_lon += lon_step
+                    continue
+                
+                # Decode back to get the geohash polygon bounds
+                decoded_lat, decoded_lon, lat_err, lon_err = geohash.decode_exactly(point_geohash)
+                
+                # Create geohash bounding box
+                geohash_box = box(
+                    decoded_lon - lon_err, decoded_lat - lat_err,
+                    decoded_lon + lon_err, decoded_lat + lat_err
+                )
+                
+                # Check if geohash intersects with boundary
+                if boundary_geom.intersects(geohash_box):
+                    # Add to unique set
+                    unique_geohashes.add(point_geohash)
+                    
+                    # Calculate center point
+                    center_lat = decoded_lat
+                    center_lon = decoded_lon
+                    
+                    geohash_features.append({
+                        "type": "Feature",
+                        "properties": {
+                            "geoHash": point_geohash,
+                            "center_lat": center_lat,
+                            "center_lon": center_lon
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [decoded_lon - lon_err, decoded_lat - lat_err],
+                                [decoded_lon + lon_err, decoded_lat - lat_err],
+                                [decoded_lon + lon_err, decoded_lat + lat_err],
+                                [decoded_lon - lon_err, decoded_lat + lat_err],
+                                [decoded_lon - lon_err, decoded_lat - lat_err]
+                            ]]
+                        }
+                    })
+                
+                current_lon += lon_step
+            current_lat += lat_step
+        
+        # Create GeoJSON FeatureCollection
+        result = {
+            "type": "FeatureCollection",
+            "features": geohash_features
         }
         
-        response = requests.post(f"{API_BASE_URL}/geospatial/boundary-to-geohash", json=payload)
+        st.info(f"Generated {len(unique_geohashes)} unique geohashes (precision {precision})")
         
-        if response.status_code == 200:
-            return response.json()
-        else:
-            try:
-                error_detail = response.json()
-                st.error(f"Failed to convert to geohash: {response.status_code}")
-                st.error(f"Error details: {error_detail}")
-            except:
-                st.error(f"Failed to convert to geohash: {response.status_code}")
-            return None
+        return {
+            "success": True,
+            "geohash_count": len(unique_geohashes),
+            "precision": precision,
+            "geohashes_geojson": result
+        }
+        
     except Exception as e:
         st.error(f"Error converting to geohash: {str(e)}")
         return None
 
 def call_select_dense_geohash_api(boundary_data, tag_filters, top_percent=0.5, precision=6):
-    """Call the API endpoint for dense geohash selection"""
+    """Select dense geohash areas from boundary using OSM data (local implementation)"""
     try:
-        payload = {
-            "boundary_geojson": boundary_data,
-            "tag_filters": tag_filters,
-            "top_percent": top_percent,
-            "precision": precision
-        }
-        
-        response = requests.post(
-            f"{API_BASE_URL}/geospatial/select-dense-geohash",
-            json=payload,
-            timeout=300
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success"):
-                geojson_result = result["dense_geohash_geojson"]
-                dense_gdf = gpd.GeoDataFrame.from_features(
-                    geojson_result["features"], 
-                    crs='EPSG:4326'
+        with st.spinner("🔄 Analyzing dense areas..."):
+            # 1. Convert GeoJSON to GeoDataFrame (read boundary)
+            # Handle both single geometry and FeatureCollection (from geohash GeoJSON)
+            if boundary_data.get("type") == "FeatureCollection":
+                # If it's a FeatureCollection (e.g., from geohash GeoJSON), use all features
+                boundary_gdf = gpd.GeoDataFrame.from_features(
+                    boundary_data["features"], 
+                    crs="EPSG:4326"
                 )
-                return dense_gdf
+            elif boundary_data.get("type") == "Feature":
+                # If it's a single Feature
+                boundary_gdf = gpd.GeoDataFrame.from_features([boundary_data], crs="EPSG:4326")
             else:
-                st.error(f"❌ API returned error: {result}")
-                return None
-        else:
-            error_detail = response.json().get("detail", "Unknown error") if response.content else "No response"
-            st.error(f"❌ API call failed: {response.status_code} - {error_detail}")
-            return None
+                # If it's just a geometry object
+                boundary_gdf = gpd.GeoDataFrame.from_features([{
+                    "type": "Feature",
+                    "geometry": boundary_data,
+                    "properties": {}
+                }], crs="EPSG:4326")
             
-    except requests.exceptions.Timeout:
-        st.error("❌ Request timeout. The analysis is taking too long.")
-        return None
-    except requests.exceptions.ConnectionError:
-        st.error("❌ Cannot connect to API. Make sure the API server is running on localhost:8000")
-        return None
+            # Create union of all boundary polygons
+            polygon = boundary_gdf.unary_union
+
+            # 2. Fetch POI and road data
+            st.info("📡 Fetching OSM data...")
+            tags_dict = {tag: True for tag in tag_filters}
+            road_tags = {'highway': ['motorway', 'trunk', 'primary', 'secondary']}
+            
+            # Fetch data
+            poi_gdf = fetch_poi_data(polygon, tags_dict)
+            roads_gdf = fetch_road_data(polygon, road_tags)
+
+            # 4. Combine POI and roads data
+            st.info(f"📊 Found {len(poi_gdf)} POI features and {len(roads_gdf)} road features")
+            all_gdf = pd.concat([poi_gdf, roads_gdf], ignore_index=True)
+            if all_gdf.empty:
+                st.error("❌ No POI or road data found.")
+                return None
+            
+            st.info(f"🔄 Processing {len(all_gdf)} total features...")
+
+            # 5. Encode to geohash (optimized batch processing)
+            st.info("🔢 Encoding geometries to geohash...")
+            all_gdf['geohash'] = encode_geohash_batch(all_gdf.geometry, precision)
+            all_gdf = all_gdf.dropna(subset=['geohash'])
+            all_gdf = all_gdf[all_gdf['geohash'].apply(lambda x: isinstance(x, str))]
+
+            # 6. Count objects per geohash
+            st.info("📈 Calculating geohash density...")
+            count_df = all_gdf.groupby('geohash').size().reset_index(name='count')
+            threshold = count_df['count'].quantile(1 - top_percent)
+            dense_df = count_df[count_df['count'] >= threshold]
+            
+            st.info(f"📍 Selected {len(dense_df)} dense geohash areas (threshold: {threshold:.1f})")
+            
+            # Early exit if no dense areas found
+            if dense_df.empty:
+                st.warning("⚠️ No dense areas found with current threshold")
+                return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+
+            # 7. Add geohash that become "centers" of dense neighbors (optimized)
+            st.info("📍 Finding missing center geohash areas...")
+            def add_missing_centers_optimized(df):
+                # Use set for faster lookups
+                existing_geohashes = set(df['geohash'].values)
+                all_neighbors = []
+                
+                # Batch process neighbors
+                for gh in df['geohash']:
+                    try:
+                        nbs = geohash.neighbors(gh)
+                        all_neighbors.extend(nbs)
+                    except:
+                        continue
+                
+                # Use Counter for frequency count
+                freq = Counter(all_neighbors)
+                
+                # Find missing centers more efficiently
+                missing = [g for g, count in freq.items() 
+                          if g not in existing_geohashes and count >= 2]
+                
+                if missing:
+                    df_extra = count_df[count_df['geohash'].isin(missing)]
+                    return pd.concat([df, df_extra], ignore_index=True)
+                return df
+
+            dense_df = add_missing_centers_optimized(dense_df)
+
+            # 8. Convert geohash to polygon (using cached function)
+            st.info("🔄 Converting geohash to polygons...")
+            dense_gdf = gpd.GeoDataFrame({
+                'geoHash': dense_df['geohash'],
+                'count': dense_df['count'],
+                'geometry': dense_df['geohash'].apply(cached_geohash_to_polygon)
+            }, crs='EPSG:4326')
+
+            # 9. Remove spatial outliers
+            st.info("🧹 Removing outlier geohash areas...")
+            dense_union = dense_gdf.unary_union
+            if dense_union.geom_type == 'MultiPolygon':
+                largest = max(dense_union.geoms, key=lambda g: g.area)
+            else:
+                largest = dense_union
+            dense_gdf = dense_gdf[dense_gdf.geometry.intersects(largest)]
+
+            st.success(f"✅ Dense geohash analysis completed. Found {len(dense_gdf)} dense areas.")
+            return dense_gdf
+            
     except Exception as e:
-        st.error(f"❌ Error calling API: {str(e)}")
+        st.error(f"❌ Error in dense geohash selection: {str(e)}")
         return None
 
-def call_backend_calculate_ukm_advanced(geohashes, chunk_size=15, max_workers=10, use_cache=False, return_geojson=True):
-    """Call FastAPI backend to calculate UKM with advanced options"""
+def fetch_roads_for_geohash(geohash_str):
+    """Fetch and clip roads for a single geohash"""
     try:
-        api_url = f"http://{settings.API_HOST}:{settings.API_PORT}/api/v1/geospatial/calculate-target-ukm-advanced"
+        south, north, west, east = geohash_to_bounds(geohash_str)
+        polygon = box(west, south, east, north)
         
-        payload = {
-            "geohashes": geohashes,
-            "chunk_size": chunk_size,
-            "max_workers": max_workers,
-            "use_cache": use_cache,
-            "return_geojson": return_geojson,
-            "background_task": False
+        # Define road tags for UKM calculation
+        tags = {
+            "highway": [
+                "motorway", "motorway_link", "secondary", "secondary_link",
+                "primary", "primary_link", "residential", "trunk", "trunk_link",
+                "tertiary", "tertiary_link", "living_street", "service", "unclassified"
+            ]
         }
         
-        response = requests.post(api_url, json=payload, timeout=300)
+        # Fetch road data from OSM
+        gdf_all = ox.features_from_bbox(north, south, east, west, tags=tags)
+        gdf_lines = gdf_all[gdf_all.geometry.type.isin(["LineString", "MultiLineString"])]
         
-        if response.status_code == 200:
-            return response.json()
+        # Clip to geohash bounds
+        gdf_clipped = gpd.clip(gdf_lines, polygon)
+        
+        if not gdf_clipped.empty:
+            return gdf_clipped.to_crs("EPSG:4326")
         else:
-            st.error(f"❌ API Error: {response.status_code} - {response.text}")
-            return None
+            return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
             
-    except requests.exceptions.Timeout:
-        st.error("❌ Request timeout. The calculation is taking too long.")
-        return None
-    except requests.exceptions.ConnectionError:
-        st.error("❌ Cannot connect to the backend API. Please ensure the FastAPI server is running.")
-        return None
     except Exception as e:
-        st.error(f"❌ Unexpected error calling backend: {e}")
+        st.warning(f"⚠️ Failed to fetch roads for geohash {geohash_str}: {e}")
+        return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+
+def call_backend_calculate_ukm_advanced(geohashes, chunk_size=15, max_workers=10, use_cache=False, return_geojson=True):
+    """Calculate target UKM by fetching and clipping roads from geohash areas (local implementation)"""
+    try:
+        start_time = time.time()
+        
+        if not geohashes:
+            st.error("❌ No geohashes provided")
+            return None
+        
+        # Filter to valid 6-character geohashes
+        valid_geohashes = [gh for gh in geohashes if len(str(gh).strip()) == 6]
+        
+        if not valid_geohashes:
+            st.error("❌ No valid 6-character geohashes found")
+            return None
+        
+        with st.spinner(f"🔍 Processing {len(valid_geohashes)} geohashes for UKM calculation..."):
+            st.info(f"🚀 Advanced UKM processing: {len(valid_geohashes)} geohashes")
+            
+            # Process roads in chunks for better performance and UI feedback
+            all_results = []
+            total_failed = 0
+            
+            chunks = [valid_geohashes[i:i + chunk_size] for i in range(0, len(valid_geohashes), chunk_size)]
+            
+            for chunk_idx, chunk in enumerate(chunks):
+                st.info(f"📦 Processing chunk {chunk_idx + 1}/{len(chunks)} with {len(chunk)} geohashes")
+                
+                chunk_results = []
+                chunk_failed = 0
+                
+                # Process each geohash in the chunk
+                for geohash_str in chunk:
+                    try:
+                        road_gdf = fetch_roads_for_geohash(geohash_str)
+                        if not road_gdf.empty:
+                            chunk_results.append(road_gdf)
+                        else:
+                            chunk_failed += 1
+                    except Exception as e:
+                        st.warning(f"⚠️ Failed to process geohash {geohash_str}: {e}")
+                        chunk_failed += 1
+                
+                all_results.extend(chunk_results)
+                total_failed += chunk_failed
+                
+                st.info(f"✅ Chunk {chunk_idx + 1} completed: {len(chunk_results)} valid, {chunk_failed} failed")
+            
+            st.info(f"🎯 Total processing completed: {len(all_results)} valid results, {total_failed} failed")
+            
+            # Combine all road segments
+            if all_results:
+                st.info(f"✅ Successfully processed {len(all_results)} geohashes")
+                combined_roads = pd.concat(all_results, ignore_index=True)
+                
+                # Calculate total length in kilometers (using metric projection)
+                roads_metric = combined_roads.to_crs(epsg=3857)
+                total_length_km = roads_metric.length.sum() / 1000
+                
+                # Convert back to WGS84 for response
+                combined_roads = combined_roads.to_crs(epsg=4326)
+                
+                # Convert to GeoJSON for response if requested
+                roads_geojson = None
+                if return_geojson:
+                    roads_geojson = json.loads(combined_roads.to_json())
+                
+                processing_time = time.time() - start_time
+                st.success(f"🎯 UKM calculation completed in {processing_time:.2f}s")
+                st.info(f"📊 Total road length: {total_length_km:.2f} km from {len(combined_roads)} segments")
+                
+                return {
+                    "success": True,
+                    "total_road_segments": len(combined_roads),
+                    "total_road_length_km": round(total_length_km, 2),
+                    "processed_geohashes": len(valid_geohashes) - total_failed,
+                    "failed_geohashes": total_failed,
+                    "processing_time_seconds": round(processing_time, 2),
+                    "cache_hits": 0,  # Not implemented for local version
+                    "cache_misses": len(valid_geohashes),
+                    "roads_geojson": roads_geojson
+                }
+            else:
+                st.warning("⚠️ No roads found in any geohash areas")
+                return {
+                    "success": True,
+                    "total_road_segments": 0,
+                    "total_road_length_km": 0.0,
+                    "processed_geohashes": 0,
+                    "failed_geohashes": len(valid_geohashes),
+                    "processing_time_seconds": round(time.time() - start_time, 2),
+                    "cache_hits": 0,
+                    "cache_misses": 0,
+                    "roads_geojson": {"type": "FeatureCollection", "features": []} if return_geojson else None
+                }
+                
+    except Exception as e:
+        st.error(f"❌ Error in UKM calculation: {str(e)}")
         return None
 
 def get_countries():
-    """Get list of available countries from API"""
+    """Get list of available countries from local file"""
     try:
-        response = requests.get(f"{API_BASE_URL}/boundary/all", timeout=10)
-        if response.status_code == 200:
-            countries = response.json()
-            return countries if countries else []
+        # Check if the Indonesia boundary file exists
+        import os
+        boundary_file = "files/id_boundary_regency.geojson"
+        
+        if os.path.exists(boundary_file):
+            # Return Indonesia as the only available country since we have its data
+            return [{"id": 1, "name": "Indonesia"}]
         else:
-            st.warning(f"⚠️ Failed to load countries from API: {response.status_code}")
+            st.warning("⚠️ Indonesia boundary file not found. Using fallback data.")
             return get_fallback_countries_simple()
-    except requests.exceptions.ConnectionError:
-        st.warning("⚠️ API connection failed. Using fallback country data.")
-        return get_fallback_countries_simple()
-    except requests.exceptions.Timeout:
-        st.warning("⚠️ API timeout. Using fallback country data.")
-        return get_fallback_countries_simple()
     except Exception as e:
-        st.warning(f"⚠️ Error connecting to API: {str(e)}. Using fallback data.")
+        st.warning(f"⚠️ Error loading country data: {str(e)}. Using fallback data.")
         return get_fallback_countries_simple()
 
 def get_fallback_countries_simple():
-    """Fallback country data when API is unavailable"""
+    """Fallback country data when local file is unavailable"""
     return [
         {"id": 1, "name": "Indonesia"},
         {"id": 2, "name": "Malaysia"}, 
@@ -373,33 +736,115 @@ def get_fallback_countries_simple():
     ]
 
 def get_boundary_data(country_id):
-    """Get boundary data for a specific country from API"""
+    """Get boundary data for a specific country from local file"""
     try:
-        payload = {"country_id": country_id}
-        response = requests.post(f"{API_BASE_URL}/boundary/", json=payload)
-        if response.status_code == 200:
-            return response.json()
+        # Only support Indonesia (country_id = 1) from local file
+        if country_id == 1:
+            return load_indonesia_boundary_data()
         else:
-            st.error(f"Failed to load boundary data: {response.status_code}")
+            st.error(f"Only Indonesia (ID=1) is supported with local boundary data")
             return None
     except Exception as e:
         st.error(f"Error getting boundary data: {str(e)}")
         return None
 
-def get_bounds_from_geojson(geojson):
-    """Calculate bounds from GeoJSON for map fitting using API"""
+def load_indonesia_boundary_data():
+    """Load Indonesia regency boundary data from local GeoJSON file"""
     try:
-        if not geojson or not geojson.get('features'):
+        import json
+        import os
+        
+        boundary_file = "files/id_boundary_regency.geojson"
+        
+        if not os.path.exists(boundary_file):
+            st.error(f"❌ Boundary file not found: {boundary_file}")
             return None
         
-        payload = {"geojson": geojson}
-        response = requests.post(f"{API_BASE_URL}/geospatial/get-bounds", json=payload)
+        # Load the GeoJSON file
+        with open(boundary_file, 'r', encoding='utf-8') as f:
+            geojson_data = json.load(f)
         
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success"):
-                return result.get("bounds")
+        # Extract features and convert to the expected format
+        if geojson_data.get("type") == "FeatureCollection" and geojson_data.get("features"):
+            features = geojson_data["features"]
+            
+            # Convert GeoJSON features to the format expected by the UI
+            rows = []
+            for feature in features:
+                properties = feature.get("properties", {})
+                geometry = feature.get("geometry", {})
+                
+                # Create a row in the expected format
+                row = {
+                    "id": properties.get("id"),
+                    "NAME": properties.get("NAME"),
+                    "TYPE": properties.get("TYPE"),
+                    "geometry": geometry  # Include the full geometry
+                }
+                rows.append(row)
+            
+            return {"rows": rows}
+        else:
+            st.error("❌ Invalid GeoJSON format in boundary file")
+            return None
+            
+    except FileNotFoundError:
+        st.error(f"❌ Boundary file not found: files/id_boundary_regency.geojson")
         return None
+    except json.JSONDecodeError as e:
+        st.error(f"❌ Error parsing JSON file: {str(e)}")
+        return None
+    except Exception as e:
+        st.error(f"❌ Error loading boundary data: {str(e)}")
+        return None
+
+def get_bounds_from_geojson(geojson):
+    """Calculate bounds from GeoJSON for map fitting (local implementation)"""
+    try:
+        if not geojson:
+            return None
+        
+        # Handle different GeoJSON types
+        if geojson.get('type') == 'FeatureCollection' and geojson.get('features'):
+            features = geojson['features']
+        elif geojson.get('type') == 'Feature':
+            features = [geojson]
+        else:
+            # Assume it's a geometry object
+            features = [{"type": "Feature", "geometry": geojson, "properties": {}}]
+        
+        if not features:
+            return None
+        
+        # Initialize bounds with first feature
+        min_lon = float('inf')
+        min_lat = float('inf')
+        max_lon = float('-inf')
+        max_lat = float('-inf')
+        
+        # Calculate bounds from all features
+        for feature in features:
+            geometry = feature.get('geometry')
+            if not geometry:
+                continue
+            
+            # Use shapely to get bounds
+            geom = shape(geometry)
+            bounds = geom.bounds  # (minx, miny, maxx, maxy)
+            
+            min_lon = min(min_lon, bounds[0])
+            min_lat = min(min_lat, bounds[1])
+            max_lon = max(max_lon, bounds[2])
+            max_lat = max(max_lat, bounds[3])
+        
+        # Check if we found valid bounds
+        if min_lon == float('inf') or min_lat == float('inf'):
+            return None
+        
+        # Return bounds in the format expected by the map
+        # [[min_lat, min_lon], [max_lat, max_lon]]
+        return [[min_lat, min_lon], [max_lat, max_lon]]
+        
     except Exception as e:
         st.error(f"Error calculating bounds: {str(e)}")
         return None
