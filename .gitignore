@@ -161,17 +161,27 @@ uploaded_files/
 temp_uploads/
 session_uploads/
 
-# Boundary and geospatial files
+# Boundary and geospatial files (exclude those in files/ directory)
 *.geojson
+!files/*.geojson
 *.kml
+!files/*.kml
 *.kmz
+!files/*.kmz
 *.shp
+!files/*.shp
 *.shx
+!files/*.shx
 *.dbf
+!files/*.dbf
 *.prj
+!files/*.prj
 *.cpg
+!files/*.cpg
 *.sbn
+!files/*.sbn
 *.sbx
+!files/*.sbx
 
 # Generated files from converters
 converted_*
