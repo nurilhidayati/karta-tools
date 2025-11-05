@@ -1,13 +1,7 @@
 import streamlit as st
 import requests
 
-# Page config
-st.set_page_config(
-    page_title="SMOOTH",
-    page_icon="🌍",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+
 
 # CSS for styling
 st.markdown("""

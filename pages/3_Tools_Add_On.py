@@ -721,16 +721,51 @@ def convert_boundary_to_geohash(boundary_geojson, precision_level):
         # Get bounding box
         minx, miny, maxx, maxy = boundary_geom.bounds
         
+        # Add padding to bounding box to ensure edge coverage (especially important for level 8)
+        # Padding should be larger for higher precision levels to ensure edge cells are captured
+        if precision_level == 8:
+            padding = 0.001  # ~111m padding for level 8 (small cells at edges)
+        elif precision_level == 7:
+            padding = 0.0008  # ~88m padding for level 7
+        elif precision_level == 6:
+            padding = 0.005  # ~555m padding for level 6
+        else:
+            padding = 0.01  # ~1.1km padding for level 5
+        
+        minx -= padding
+        miny -= padding
+        maxx += padding
+        maxy += padding
+        
         # Generate geohash grid
         # Use set to track unique geohashes and avoid duplicates
         unique_geohashes = set()
         geohash_features = []
         
-        # Calculate step size based on precision (more conservative to ensure coverage)
-        lat_step = 0.008 if precision_level == 5 else 0.003 if precision_level == 6 else 0.001
-        lon_step = 0.008 if precision_level == 5 else 0.003 if precision_level == 6 else 0.001
+        # Calculate step size based on precision (use smaller steps to avoid gaps)
+        # Level 5: ~5km cells, Level 6: ~1.2km cells, Level 7: ~150m cells, Level 8: ~19m cells
+        # Use step size that's much smaller than the geohash cell size to ensure complete coverage
+        if precision_level == 5:
+            lat_step = 0.004  # Half of cell size
+            lon_step = 0.004
+        elif precision_level == 6:
+            lat_step = 0.0015  # Half of cell size
+            lon_step = 0.0015
+        elif precision_level == 7:
+            lat_step = 0.0005  # Half of cell size
+            lon_step = 0.0005
+        elif precision_level == 8:
+            # For level 8, use very small step to ensure no gaps
+            # Level 8 cells are ~19m, which is ~0.00017 degrees
+            # Use step of ~0.00005 (about 1/3 of cell size) to ensure coverage
+            lat_step = 0.00005
+            lon_step = 0.00005
+        else:
+            # Default to level 6 step size
+            lat_step = 0.0015
+            lon_step = 0.0015
         
-        # Generate grid points
+        # Generate grid points with better coverage
         current_lat = miny
         while current_lat <= maxy:
             current_lon = minx
@@ -1023,7 +1058,7 @@ if st.session_state.boundary_geojson:
     with col1:
         precision_level = st.selectbox(
             "🎯 Select GeoHash Precision Level",
-            options=[5, 6, 7],
+            options=[5, 6, 7, 8],
             index=1,  # Default to level 6
             help="Higher precision levels create more detailed (smaller) geohash cells"
         )
@@ -1041,8 +1076,20 @@ if st.session_state.boundary_geojson:
                         st.error("❌ Failed to generate GeoHash. Please try again.")
     
     with col2:
+        # Show precision level information
+        precision_info = {
+            5: "~5km × 5km cells",
+            6: "~1.2km × 1.2km cells",
+            7: "~150m × 150m cells",
+            8: "~19m × 19m cells"
+        }
+        cell_size = precision_info.get(precision_level, "Unknown")
         st.info(f"""
         **Precision Level {precision_level}:**
+        
+        Cell Size: {cell_size}
+        
+        Higher levels = Smaller cells = More detailed
         """)
 
 
@@ -1235,6 +1282,365 @@ if uploaded_files:
                 file_name="geojson_output.zip",
                 mime="application/zip",
                 key="download_zip_geojson"
+            )
+
+st.markdown("---")
+
+# ============================================================================
+# CSV TO GEOHASH LEVEL 8 CONVERTER SECTION
+# ============================================================================
+
+st.title("CSV to Geohash Level 8 Converter")
+st.markdown("Upload CSV files containing latitude and longitude columns. Each coordinate will be converted to Geohash Level 8.")
+
+uploaded_files = st.file_uploader("📄 Upload CSV files", type="csv", accept_multiple_files=True, key="csv_to_geohash8_uploader")
+
+if uploaded_files:
+    output_dir = tempfile.mkdtemp()
+    csv_paths = []
+
+    for file in uploaded_files:
+        st.write(f"Processing: **{file.name}**")
+        try:
+            df = pd.read_csv(file)
+            
+            # Try to find latitude and longitude columns (case-insensitive)
+            lat_col = None
+            lon_col = None
+            
+            # Common column name variations
+            for col in df.columns:
+                col_lower = col.lower().strip()
+                if col_lower in ['lat', 'latitude']:
+                    lat_col = col
+                elif col_lower in ['lon', 'lng', 'longitude', 'long']:
+                    lon_col = col
+            
+            if lat_col is None or lon_col is None:
+                st.warning(f"Skipped `{file.name}` — missing latitude/longitude columns. Expected columns: 'lat'/'latitude' and 'lon'/'longitude'/'lng'.")
+                st.info(f"Available columns: {', '.join(df.columns)}")
+                continue
+            
+            # Convert coordinates to geohash level 8
+            def convert_to_geohash8(row):
+                try:
+                    lat = float(row[lat_col])
+                    lon = float(row[lon_col])
+                    # Validate coordinates
+                    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+                        return None
+                    return geohash2.encode(lat, lon, precision=8)
+                except (ValueError, TypeError):
+                    return None
+            
+            df['geoHash'] = df.apply(convert_to_geohash8, axis=1)
+            
+            # Check if any geohashes were generated
+            if df['geoHash'].isna().all():
+                st.error(f"Error processing `{file.name}` — could not generate geohashes. Please check your coordinate data.")
+                continue
+            
+            # Count successful conversions
+            successful = df['geoHash'].notna().sum()
+            total = len(df)
+            
+            if successful < total:
+                st.warning(f"⚠️ Generated {successful} geohashes out of {total} rows. Some rows had invalid coordinates.")
+            else:
+                st.success(f"✅ Generated {successful} geohashes for {total} rows")
+            
+            # Save CSV
+            csv_name = file.name.replace(".csv", "_geohash8.csv")
+            csv_path = os.path.join(output_dir, csv_name)
+            df.to_csv(csv_path, index=False)
+            
+            csv_paths.append(csv_path)
+            st.success(f"✅ Converted: {csv_name}")
+            
+        except Exception as e:
+            st.error(f"Error processing `{file.name}`: {e}")
+
+    if len(csv_paths) == 1:
+        # Single file: Download directly
+        csv_path = csv_paths[0]
+        with open(csv_path, "rb") as f:
+            st.download_button(
+                label="⬇️ Download CSV with Geohash Level 8",
+                data=f,
+                file_name=os.path.basename(csv_path),
+                mime="text/csv",
+                key="download_single_geohash8_csv"
+            )
+
+    elif len(csv_paths) > 1:
+        # Multiple files: Zip and download
+        zip_path = os.path.join(output_dir, "converted_geohash8_csvs.zip")
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for csv_file in csv_paths:
+                zipf.write(csv_file, os.path.basename(csv_file))
+
+        with open(zip_path, "rb") as f:
+            st.download_button(
+                label="📦 Download All CSVs with Geohash Level 8 as ZIP",
+                data=f,
+                file_name="geohash8_output.zip",
+                mime="application/zip",
+                key="download_zip_geohash8_csv"
+            )
+
+st.markdown("---")
+
+# ============================================================================
+# GEOJSON TO GEOHASH LEVEL 8 CONVERTER SECTION
+# ============================================================================
+
+st.title("GeoJSON to Geohash Level 8 Converter")
+st.markdown("Upload GeoJSON files with point, polygon, or linestring geometries. Each feature will be converted to Geohash Level 8 based on its coordinates.")
+
+uploaded_files = st.file_uploader("📄 Upload GeoJSON files", type="geojson", accept_multiple_files=True, key="geojson_to_geohash8_uploader")
+
+if uploaded_files:
+    output_dir = tempfile.mkdtemp()
+    csv_paths = []
+
+    for file in uploaded_files:
+        st.write(f"Processing: **{file.name}**")
+        try:
+            # Read GeoJSON file
+            geojson_data = json.loads(file.read().decode('utf-8'))
+            
+            # Convert to GeoDataFrame
+            gdf = gpd.read_file(StringIO(json.dumps(geojson_data)))
+            
+            # Extract coordinates and convert to geohash
+            rows = []
+            
+            for idx, row in gdf.iterrows():
+                geom = row.geometry
+                properties = row.drop('geometry').to_dict()
+                
+                # Get coordinates based on geometry type
+                lat = None
+                lon = None
+                
+                if geom.geom_type == 'Point':
+                    lon, lat = geom.x, geom.y
+                elif geom.geom_type in ['Polygon', 'MultiPolygon', 'LineString', 'MultiLineString']:
+                    # Use centroid for polygons and linestrings
+                    centroid = geom.centroid
+                    lon, lat = centroid.x, centroid.y
+                elif geom.geom_type == 'MultiPoint':
+                    # Use first point for multipoint
+                    lon, lat = geom.geoms[0].x, geom.geoms[0].y
+                else:
+                    # For other types, try to get centroid
+                    try:
+                        centroid = geom.centroid
+                        lon, lat = centroid.x, centroid.y
+                    except:
+                        continue
+                
+                # Validate coordinates
+                if lat is not None and lon is not None and (-90 <= lat <= 90) and (-180 <= lon <= 180):
+                    geohash8 = geohash2.encode(lat, lon, precision=8)
+                    
+                    # Create row with properties and geohash
+                    row_data = properties.copy()
+                    row_data['geoHash'] = geohash8
+                    row_data['lat'] = lat
+                    row_data['lon'] = lon
+                    row_data['geometry_type'] = geom.geom_type
+                    
+                    rows.append(row_data)
+            
+            if not rows:
+                st.error(f"Error processing `{file.name}` — could not extract valid coordinates from geometries.")
+                continue
+            
+            # Create DataFrame
+            df = pd.DataFrame(rows)
+            
+            # Count successful conversions
+            successful = len(df)
+            st.success(f"✅ Generated {successful} Geohash Level 8 codes for {successful} features")
+            
+            # Save CSV
+            csv_name = file.name.replace(".geojson", "_geohash8.csv")
+            csv_path = os.path.join(output_dir, csv_name)
+            df.to_csv(csv_path, index=False)
+            
+            csv_paths.append(csv_path)
+            st.success(f"✅ Converted: {csv_name}")
+            
+        except Exception as e:
+            st.error(f"Error processing `{file.name}`: {e}")
+
+    if len(csv_paths) == 1:
+        # Single file: Download directly
+        csv_path = csv_paths[0]
+        with open(csv_path, "rb") as f:
+            st.download_button(
+                label="⬇️ Download CSV with Geohash Level 8",
+                data=f,
+                file_name=os.path.basename(csv_path),
+                mime="text/csv",
+                key="download_single_geojson_geohash8_csv"
+            )
+
+    elif len(csv_paths) > 1:
+        # Multiple files: Zip and download
+        zip_path = os.path.join(output_dir, "converted_geojson_geohash8_csvs.zip")
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for csv_file in csv_paths:
+                zipf.write(csv_file, os.path.basename(csv_file))
+
+        with open(zip_path, "rb") as f:
+            st.download_button(
+                label="📦 Download All CSVs with Geohash Level 8 as ZIP",
+                data=f,
+                file_name="geojson_geohash8_output.zip",
+                mime="application/zip",
+                key="download_zip_geojson_geohash8_csv"
+            )
+
+st.markdown("---")
+
+# ============================================================================
+# CSV TO GEOHASH LEVEL 8 GEOJSON CONVERTER SECTION
+# ============================================================================
+
+st.title("CSV to Geohash Level 8 GeoJSON Converter")
+st.markdown("Upload CSV files containing latitude and longitude columns. Each coordinate will be converted to Geohash Level 8 and output as GeoJSON with polygon geometries.")
+
+uploaded_files = st.file_uploader("📄 Upload CSV files", type="csv", accept_multiple_files=True, key="csv_to_geohash8_geojson_uploader")
+
+if uploaded_files:
+    output_dir = tempfile.mkdtemp()
+    geojson_paths = []
+
+    for file in uploaded_files:
+        st.write(f"Processing: **{file.name}**")
+        try:
+            df = pd.read_csv(file)
+            
+            # Try to find latitude and longitude columns (case-insensitive)
+            lat_col = None
+            lon_col = None
+            
+            # Common column name variations
+            for col in df.columns:
+                col_lower = col.lower().strip()
+                if col_lower in ['lat', 'latitude']:
+                    lat_col = col
+                elif col_lower in ['lon', 'lng', 'longitude', 'long']:
+                    lon_col = col
+            
+            if lat_col is None or lon_col is None:
+                st.warning(f"Skipped `{file.name}` — missing latitude/longitude columns. Expected columns: 'lat'/'latitude' and 'lon'/'longitude'/'lng'.")
+                st.info(f"Available columns: {', '.join(df.columns)}")
+                continue
+            
+            # Convert coordinates to geohash level 8 and create polygons
+            geohash_features = []
+            successful = 0
+            failed = 0
+            
+            for idx, row in df.iterrows():
+                try:
+                    lat = float(row[lat_col])
+                    lon = float(row[lon_col])
+                    
+                    # Validate coordinates
+                    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+                        failed += 1
+                        continue
+                    
+                    # Generate geohash level 8
+                    geohash8 = geohash2.encode(lat, lon, precision=8)
+                    
+                    # Convert geohash to polygon
+                    geohash_polygon = geohash_to_polygon(geohash8)
+                    
+                    # Get all properties from the row (excluding lat/lon columns)
+                    properties = row.to_dict()
+                    
+                    # Add geohash to properties
+                    properties['geoHash'] = geohash8
+                    properties['center_lat'] = lat
+                    properties['center_lon'] = lon
+                    
+                    # Create GeoJSON feature
+                    feature = {
+                        "type": "Feature",
+                        "properties": properties,
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [list(geohash_polygon.exterior.coords)]
+                        }
+                    }
+                    
+                    geohash_features.append(feature)
+                    successful += 1
+                    
+                except (ValueError, TypeError) as e:
+                    failed += 1
+                    continue
+            
+            if not geohash_features:
+                st.error(f"Error processing `{file.name}` — could not generate geohashes. Please check your coordinate data.")
+                continue
+            
+            # Create GeoJSON FeatureCollection
+            geojson_data = {
+                "type": "FeatureCollection",
+                "features": geohash_features
+            }
+            
+            # Show success message
+            if failed > 0:
+                st.warning(f"⚠️ Generated {successful} geohash polygons out of {len(df)} rows. {failed} rows had invalid coordinates.")
+            else:
+                st.success(f"✅ Generated {successful} Geohash Level 8 polygons for {len(df)} rows")
+            
+            # Save GeoJSON
+            geojson_name = file.name.replace(".csv", "_geohash8.geojson")
+            geojson_path = os.path.join(output_dir, geojson_name)
+            
+            with open(geojson_path, 'w', encoding='utf-8') as f:
+                json.dump(geojson_data, f, ensure_ascii=False, indent=2)
+            
+            geojson_paths.append(geojson_path)
+            st.success(f"✅ Converted: {geojson_name}")
+            
+        except Exception as e:
+            st.error(f"Error processing `{file.name}`: {e}")
+
+    if len(geojson_paths) == 1:
+        # Single file: Download directly
+        geojson_path = geojson_paths[0]
+        with open(geojson_path, "rb") as f:
+            st.download_button(
+                label="⬇️ Download GeoJSON with Geohash Level 8",
+                data=f,
+                file_name=os.path.basename(geojson_path),
+                mime="application/geo+json",
+                key="download_single_csv_geohash8_geojson"
+            )
+
+    elif len(geojson_paths) > 1:
+        # Multiple files: Zip and download
+        zip_path = os.path.join(output_dir, "converted_csv_geohash8_geojsons.zip")
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for geojson_file in geojson_paths:
+                zipf.write(geojson_file, os.path.basename(geojson_file))
+
+        with open(zip_path, "rb") as f:
+            st.download_button(
+                label="📦 Download All GeoJSONs with Geohash Level 8 as ZIP",
+                data=f,
+                file_name="csv_geohash8_geojson_output.zip",
+                mime="application/zip",
+                key="download_zip_csv_geohash8_geojson"
             )
 
 # Footer
