@@ -4,7 +4,6 @@ import requests
 import pandas as pd
 import geopandas as gpd
 from io import BytesIO
-from config import settings
 import folium
 from streamlit_folium import st_folium
 import math
@@ -19,14 +18,8 @@ import time
 from functools import lru_cache
 
 # API Configuration
-API_BASE_URL = f"http://{settings.API_HOST}:{settings.API_PORT}/api/v1"
+API_BASE_URL = "http://localhost:8000/api/v1"
 
-# Local cache for OSM data
-osm_cache = {}
-osm_cache_with_ttl = {}
-CACHE_TTL = 3600  # 1 hour cache
-
-# Helper functions extracted from geospatial API
 
 @lru_cache(maxsize=1000)
 def cached_geohash_encode(lat: float, lon: float, precision: int) -> str:
@@ -996,7 +989,7 @@ def create_workflow_map(boundary_geojson=None, dense_geohash_gdf=None, roads_geo
 def get_countries_pricing():
     """Get all countries with their pricing information from API"""
     try:
-        api_url = f"http://{settings.API_HOST}:{settings.API_PORT}/api/v1/country/pricing"
+        api_url = f"{API_BASE_URL}/country/pricing"
         response = requests.get(api_url, timeout=30)
         
         if response.status_code == 200:
@@ -1287,6 +1280,12 @@ if 'budget_result' not in st.session_state:
     st.session_state.budget_result = None
 if 'is_processing' not in st.session_state:
     st.session_state.is_processing = False
+if 'generated_geohash_grid' not in st.session_state:
+    st.session_state.generated_geohash_grid = None
+if 'boundary_geojson' not in st.session_state:
+    st.session_state.boundary_geojson = None
+if 'geohash_precision' not in st.session_state:
+    st.session_state.geohash_precision = 6
 
 # Example usage function for Streamlit UI
 def streamlit_complete_workflow_ui():
@@ -2150,56 +2149,279 @@ def streamlit_complete_workflow_ui():
         st.error("❌ No countries available from API.")
         st.stop()
     
-    # Country Selection
-    st.subheader("🌍 Select Country")
-    country_options = ["-- Select Country --"] + [country['name'] for country in countries]
-    selected_country_option = st.selectbox("Choose a country:", country_options)
+    # Boundary Source Selection
+    st.subheader("📍 Select Boundary Source")
+    st.markdown("Choose how you want to define your target area:")
     
-    # Region Selection
-    st.subheader("🏞️ Select Region")
+    # Create tabs for different boundary input methods
+    tab1, tab2, tab3 = st.tabs(["🗺️ Select from Database", "📁 Upload File", "✏️ Draw Polygon"])
     
-    if selected_country_option != "-- Select Country --":
-        selected_country = next((c for c in countries if c['name'] == selected_country_option), None)
-        country_id = selected_country['id'] if selected_country else None
+    # Initialize boundary source tracking
+    if 'boundary_source' not in st.session_state:
+        st.session_state.boundary_source = None
+    if 'uploaded_boundary_geojson' not in st.session_state:
+        st.session_state.uploaded_boundary_geojson = None
+    if 'drawn_boundary_geojson' not in st.session_state:
+        st.session_state.drawn_boundary_geojson = None
+    
+    boundary_ready = False
+    final_boundary_geojson = None
+    boundary_name = "boundary"
+    
+    # TAB 1: Select from Database (Country + Region)
+    with tab1:
+        st.markdown("### 🌍 Select Country and Region from Database")
+    
+        # Country Selection
+        country_options = ["-- Select Country --"] + [country['name'] for country in countries]
         
-        boundary_data = get_boundary_data(country_id)
+        # Store previous selection to detect changes
+        previous_country = st.session_state.get('previous_country_selection', None)
         
-        if boundary_data and boundary_data.get("rows"):
-            regions = boundary_data["rows"]
+        selected_country_option = st.selectbox("Choose a country:", country_options, key="country_select")
+        
+        # Clear geohash if country changed
+        if previous_country != selected_country_option:
+            st.session_state.generated_geohash_grid = None
+            st.session_state.boundary_geojson = None
+            st.session_state.previous_country_selection = selected_country_option
+        
+        # Region Selection
+        st.markdown("**🏞️ Select Region:**")
+        
+        if selected_country_option != "-- Select Country --":
+            selected_country = next((c for c in countries if c['name'] == selected_country_option), None)
+            country_id = selected_country['id'] if selected_country else None
             
-            region_options = []
-            for i, region in enumerate(regions):
-                name = None
-                for field in ['NAME']:
-                    if region.get(field) and str(region.get(field)).strip():
-                        name = str(region.get(field)).strip()
-                        break
+            boundary_data = get_boundary_data(country_id)
+            
+            if boundary_data and boundary_data.get("rows"):
+                regions = boundary_data["rows"]
                 
-                if not name:
-                    name = f"Region {i+1}"
-                region_options.append(name)
-            
-            selected_region_name = st.selectbox("Choose a region:", ["-- Select Region --"] + region_options)
-            
-            # Check if valid region is selected
-            region_selected = selected_region_name != "-- Select Region --"
-            
-            # Initialize variables for parameters
-            all_selected_tags = []
-            top_percent = 0.5
-            precision = 6
-            chunk_size = 15
-            max_workers = 10
-            selected_region_data = None
-            
+                region_options = []
+                for i, region in enumerate(regions):
+                    name = None
+                    for field in ['NAME']:
+                        if region.get(field) and str(region.get(field)).strip():
+                            name = str(region.get(field)).strip()
+                            break
+                    
+                    if not name:
+                        name = f"Region {i+1}"
+                    region_options.append(name)
+                
+                # Store previous region selection to detect changes
+                previous_region = st.session_state.get('previous_region_selection', None)
+                
+                selected_region_name = st.selectbox("Choose a region:", ["-- Select Region --"] + region_options)
+                
+                # Clear geohash if region changed
+                if previous_region != selected_region_name:
+                    st.session_state.generated_geohash_grid = None
+                    st.session_state.boundary_geojson = None
+                    st.session_state.previous_region_selection = selected_region_name
+                
+                # Check if valid region is selected
+                region_selected = selected_region_name != "-- Select Region --"
+                
+                # Initialize variables for parameters
+                all_selected_tags = []
+                top_percent = 0.5
+                precision = 6
+                chunk_size = 15
+                max_workers = 10
+                selected_region_data = None
+                
+                if region_selected:
+                    selected_region_index = region_options.index(selected_region_name)
+                    selected_region_data = regions[selected_region_index]
+                
+            # Generate Geohash Section - Show immediately after region is selected
             if region_selected:
-                selected_region_index = region_options.index(selected_region_name)
-                selected_region_data = regions[selected_region_index]
+                st.markdown("---")
+                st.subheader("🔢 Step 1: Generate Geohash Grid")
+                st.markdown("Generate geohash grid from the selected region boundary")
+                
+                # Precision selection for geohash generation
+                col1, col2 = st.columns(2)
+                with col1:
+                    geohash_precision = st.selectbox(
+                        "🎯 Select GeoHash Precision Level",
+                        options=[5, 6, 7],
+                        index=1,  # Default to level 6
+                        help="Higher precision levels create more detailed (smaller) geohash cells"
+                    )
+                
+                with col2:
+                    st.info(f"""
+                    **Precision Level {geohash_precision}:**
+                    - Level 5: ~4.9km x 4.9km
+                    - Level 6: ~1.2km x 0.6km
+                    - Level 7: ~153m x 153m
+                    """)
+                
+                # Generate Geohash Button
+                generate_geohash_clicked = st.button('🔢 Generate Geohash', type='primary', use_container_width=True, key='generate_geohash_btn')
+                
+                # Process geohash generation
+                if generate_geohash_clicked:
+                    with st.spinner("🔄 Generating geohash grid from boundary..."):
+                        try:
+                            # Step 1: Extract GeoJSON from boundary data
+                            extract_payload = {
+                                "boundary_data": boundary_data
+                            }
+                            extract_response = requests.post(
+                                f"{API_BASE_URL}/geospatial/extract-geojson",
+                                json=extract_payload
+                            )
+                            
+                            if extract_response.status_code == 200:
+                                extract_result = extract_response.json()
+                                boundary_geojson = extract_result['geojson']
+                                
+                                # Step 2: Convert boundary to geohash
+                                # Get the first feature's geometry
+                                if boundary_geojson.get("type") == "FeatureCollection" and boundary_geojson.get("features"):
+                                    first_geometry = boundary_geojson["features"][0]["geometry"]
+                                else:
+                                    first_geometry = boundary_geojson.get("geometry", boundary_geojson)
+                                
+                                geohash_payload = {
+                                    "boundary_geojson": {"geometry": first_geometry},
+                                    "precision": geohash_precision
+                                }
+                                
+                                geohash_response = requests.post(
+                                    f"{API_BASE_URL}/geospatial/boundary-to-geohash",
+                                    json=geohash_payload
+                                )
+                                
+                                if geohash_response.status_code == 200:
+                                    geohash_result = geohash_response.json()
+                                    
+                                    # Store in session state
+                                    st.session_state.generated_geohash_grid = geohash_result
+                                    st.session_state.boundary_geojson = boundary_geojson
+                                    st.session_state.geohash_precision = geohash_precision
+                                    
+                                    st.success(f"✅ Generated {geohash_result['geohash_count']} geohash cells (precision {geohash_precision})")
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ Failed to generate geohash: {geohash_response.text}")
+                            else:
+                                st.error(f"❌ Failed to extract boundary GeoJSON: {extract_response.text}")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Error generating geohash: {str(e)}")
+                
+                # Display generated geohash if available
+                if hasattr(st.session_state, 'generated_geohash_grid') and st.session_state.generated_geohash_grid:
+                    col_status, col_reset = st.columns([3, 1])
+                    with col_status:
+                        st.success(f"✅ Geohash grid generated: {st.session_state.generated_geohash_grid['geohash_count']} cells")
+                    with col_reset:
+                        if st.button("🔄 Reset", key="reset_geohash", help="Clear the generated geohash and start over"):
+                            st.session_state.generated_geohash_grid = None
+                            st.session_state.boundary_geojson = None
+                            st.rerun()
+                    
+                    # Create a simple map preview
+                    with st.expander("🗺️ Preview Geohash Grid", expanded=False):
+                        try:
+                            import folium
+                            from streamlit_folium import st_folium
+                            
+                            # Create base map
+                            m = folium.Map(location=[-2.5, 117.5], zoom_start=10)
+                            
+                            # Add boundary layer
+                            if hasattr(st.session_state, 'boundary_geojson'):
+                                folium.GeoJson(
+                                    st.session_state.boundary_geojson,
+                                    name="Boundary",
+                                    style_function=lambda x: {
+                                        "color": "#3388ff", 
+                                        "weight": 2, 
+                                        "fillOpacity": 0.1,
+                                        "fillColor": "#3388ff"
+                                    }
+                                ).add_to(m)
+                            
+                            # Add geohash layer
+                            geohash_geojson = st.session_state.generated_geohash_grid.get('geohashes_geojson')
+                            if geohash_geojson:
+                                folium.GeoJson(
+                                    geohash_geojson,
+                                    name="Geohash Grid",
+                                    style_function=lambda x: {
+                                        "color": "#ff6b35", 
+                                        "weight": 1, 
+                                        "fillOpacity": 0.2,
+                                        "fillColor": "#ff6b35"
+                                    }
+                                ).add_to(m)
+                                
+                                # Fit bounds to geohash
+                                if geohash_geojson.get('features'):
+                                    first_feature = geohash_geojson['features'][0]
+                                    coords = first_feature['geometry']['coordinates'][0]
+                                    lats = [c[1] for c in coords]
+                                    lons = [c[0] for c in coords]
+                                    m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+                            
+                            folium.LayerControl().add_to(m)
+                            st_folium(m, width=None, height=400)
+                        except Exception as e:
+                            st.error(f"Error displaying map: {str(e)}")
+                    
+                    # Download buttons for geohash
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        geohash_geojson = st.session_state.generated_geohash_grid.get('geohashes_geojson')
+                        if geohash_geojson:
+                            geohash_str = json.dumps(geohash_geojson, ensure_ascii=False, indent=2)
+                            st.download_button(
+                                label="📄 Download Geohash GeoJSON",
+                                data=geohash_str,
+                                file_name=f"{selected_region_name}_geohash_level_{geohash_precision}.geojson",
+                                mime="application/geo+json",
+                                key="download_initial_geohash_geojson"
+                            )
+                    
+                    with col2:
+                        # Convert to CSV
+                        try:
+                            geohash_features = geohash_geojson.get('features', [])
+                            if geohash_features:
+                                rows = []
+                                for feature in geohash_features:
+                                    props = feature.get("properties", {})
+                                    rows.append({
+                                        "geohash": props.get("geoHash", ""),
+                                        "lat": props.get("center_lat", ""),
+                                        "lon": props.get("center_lon", "")
+                                    })
+                                df = pd.DataFrame(rows)
+                                csv_data = df.to_csv(index=False)
+                                
+                                st.download_button(
+                                    label="📊 Download Geohash CSV",
+                                    data=csv_data,
+                                    file_name=f"{selected_region_name}_geohash_level_{geohash_precision}.csv",
+                                    mime="text/csv",
+                                    key="download_initial_geohash_csv"
+                                )
+                        except Exception as e:
+                            st.error(f"Error generating CSV: {str(e)}")
+                
+                st.markdown("---")
                 
             # Parameter Selection Section - Always show if region is selected
-            if region_selected:
-                st.subheader("⚙️ Select Parameters")
-                
+            if region_selected and hasattr(st.session_state, 'generated_geohash_grid') and st.session_state.generated_geohash_grid:
+                st.subheader("⚙️ Step 2: Route Plan and Automatic Selected Geohash")
+                st.markdown("Generate route plan from OpenStreetMap data and automatically select dense geohash areas")
+                st.markdown("This will fetch road networks and POI data from the areas covered by your features using the Overpass API.")
                 # Way Tags Selection
                 st.markdown("**🛣️ Way Tags:**")
                 way_tags_options = {
@@ -2335,26 +2557,264 @@ def streamlit_complete_workflow_ui():
                         
                 
             
-            # Check if parameters are selected
-            parameters_selected = len(all_selected_tags) > 0
+                # Check if parameters are selected
+                parameters_selected = len(all_selected_tags) > 0
+            else:
+                st.selectbox("Choose a region:", ["-- No regions available --"], disabled=True)
+                st.warning("⚠️ No regions available for the selected country")
+                
+                # Set variables for consistency
+                region_selected = False
+                all_selected_tags = []
+                parameters_selected = False
+                generate_clicked = False
         else:
-            st.selectbox("Choose a region:", ["-- No regions available --"], disabled=True)
-            st.warning("⚠️ No regions available for the selected country")
+            st.selectbox("Choose a region:", ["-- Select Country first --"], disabled=True)
             
             # Set variables for consistency
             region_selected = False
             all_selected_tags = []
             parameters_selected = False
             generate_clicked = False
-    else:
-        st.selectbox("Choose a region:", ["-- Select Country first --"], disabled=True)
-        
-        # Set variables for consistency
-        region_selected = False
-        all_selected_tags = []
-        parameters_selected = False
-        generate_clicked = False
             
+    # TAB 2: Upload File
+    with tab2:
+        st.markdown("### 📁 Upload Boundary File")
+        st.markdown("Upload a GeoJSON, KML, or Shapefile containing your boundary")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a file",
+            type=["geojson", "json", "kml", "kmz", "shp", "zip"],
+            help="Upload a boundary file in GeoJSON, KML, or Shapefile format",
+            key="boundary_file_upload"
+        )
+        
+        if uploaded_file:
+            try:
+                file_extension = uploaded_file.name.split('.')[-1].lower()
+                
+                if file_extension in ['geojson', 'json']:
+                    # Read GeoJSON directly
+                    geojson_data = json.loads(uploaded_file.read().decode('utf-8'))
+                    st.session_state.uploaded_boundary_geojson = geojson_data
+                    st.session_state.boundary_source = 'upload'
+                    boundary_name = uploaded_file.name.replace('.geojson', '').replace('.json', '')
+                    
+                elif file_extension in ['kml', 'kmz']:
+                    # Read KML/KMZ using geopandas
+                    gdf = gpd.read_file(uploaded_file)
+                    # Convert to GeoJSON
+                    geojson_str = gdf.to_json()
+                    st.session_state.uploaded_boundary_geojson = json.loads(geojson_str)
+                    st.session_state.boundary_source = 'upload'
+                    boundary_name = uploaded_file.name.replace('.kml', '').replace('.kmz', '')
+                    
+                elif file_extension in ['shp', 'zip']:
+                    # Read Shapefile
+                    gdf = gpd.read_file(uploaded_file)
+                    # Convert to GeoJSON
+                    geojson_str = gdf.to_json()
+                    st.session_state.uploaded_boundary_geojson = json.loads(geojson_str)
+                    st.session_state.boundary_source = 'upload'
+                    boundary_name = uploaded_file.name.replace('.shp', '').replace('.zip', '')
+                
+                st.success(f"✅ Successfully loaded boundary file: {uploaded_file.name}")
+                
+                # Show preview map
+                st.markdown("**🗺️ Preview:**")
+                try:
+                    m = folium.Map(location=[0, 0], zoom_start=2)
+                    folium.GeoJson(
+                        st.session_state.uploaded_boundary_geojson,
+                        name="Uploaded Boundary",
+                        style_function=lambda x: {
+                            "color": "#3388ff", 
+                            "weight": 2, 
+                            "fillOpacity": 0.2,
+                            "fillColor": "#3388ff"
+                        }
+                    ).add_to(m)
+                    
+                    # Fit bounds
+                    if st.session_state.uploaded_boundary_geojson.get('features'):
+                        try:
+                            gdf_temp = gpd.GeoDataFrame.from_features(st.session_state.uploaded_boundary_geojson['features'])
+                            bounds = gdf_temp.total_bounds
+                            m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+                        except:
+                            pass
+                    
+                    st_folium(m, width=None, height=300)
+                except Exception as e:
+                    st.warning(f"Could not display preview: {str(e)}")
+                
+            except Exception as e:
+                st.error(f"❌ Error reading boundary file: {str(e)}")
+                st.session_state.uploaded_boundary_geojson = None
+                st.session_state.boundary_source = None
+    
+    # TAB 3: Draw Polygon
+    with tab3:
+        st.markdown("### ✏️ Draw Custom Polygon")
+        st.markdown("Draw your custom boundary on the map")
+        
+        st.info("""
+        🎨 **How to draw:**
+        1. Click the **polygon tool** (📐) in the left toolbar of the map
+        2. Click on the map to add points for your polygon
+        3. Complete the polygon by clicking the first point again or double-clicking
+        4. Click the '✅ Confirm Drawn Polygon' button below
+        
+        You can also use the **rectangle tool** (⬜) for quick rectangular areas.
+        """)
+        
+        # Create a map with draw controls
+        try:
+            # Import required folium plugins (folium already imported at top)
+            import folium.plugins as plugins
+            
+            # Create base map centered on Indonesia
+            m = folium.Map(
+                location=[-2.5, 117.5],
+                zoom_start=5,
+                tiles='OpenStreetMap',
+                prefer_canvas=True
+            )
+            
+            # Add draw control with proper configuration
+            draw_plugin = plugins.Draw(
+                export=True,
+                filename='drawn_polygon.geojson',
+                position='topleft',
+                draw_options={
+                    'polyline': False,
+                    'circlemarker': False,
+                    'circle': False,
+                    'marker': False,
+                    'rectangle': {
+                        'shapeOptions': {
+                            'color': '#ff6b35',
+                            'weight': 3,
+                            'fillOpacity': 0.3,
+                            'fillColor': '#ff6b35'
+                        }
+                    },
+                    'polygon': {
+                        'allowIntersection': False,
+                        'showArea': True,
+                        'metric': True,
+                        'shapeOptions': {
+                            'color': '#ff6b35',
+                            'weight': 3,
+                            'fillOpacity': 0.3,
+                            'fillColor': '#ff6b35'
+                        }
+                    }
+                },
+                edit_options={
+                    'edit': True,
+                    'remove': True
+                }
+            )
+            
+            # Add the draw plugin to map
+            m.add_child(draw_plugin)
+            
+            # Add fullscreen option
+            fullscreen = plugins.Fullscreen(
+                position='topright',
+                title='Fullscreen',
+                title_cancel='Exit fullscreen',
+                force_separate_button=True
+            )
+            m.add_child(fullscreen)
+            
+            # Display the map
+            st.markdown("**🗺️ Interactive Map:**")
+            map_output = st_folium(
+                m,
+                width=None,
+                height=500,
+                returned_objects=["all_drawings"],
+                key="draw_polygon_map"
+            )
+            
+            # Check if polygon already exists in session
+            if st.session_state.get('drawn_boundary_geojson'):
+                st.success("✅ Polygon is saved and ready for geohash generation")
+                
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("🔄 Clear Drawn Polygon", use_container_width=True, key="clear_drawn"):
+                        st.session_state.drawn_boundary_geojson = None
+                        st.session_state.boundary_source = None
+                        st.success("Cleared! Draw a new polygon above.")
+                        st.rerun()
+                
+                with col2:
+                    # Show preview of saved polygon
+                    if st.button("👁️ View Saved Polygon", use_container_width=True, key="view_saved"):
+                        st.json(st.session_state.drawn_boundary_geojson, expanded=False)
+            
+            # Process drawn features from map
+            if map_output and map_output.get('all_drawings'):
+                drawings = map_output['all_drawings']
+                
+                if len(drawings) > 0:
+                    st.success(f"🎨 You have drawn {len(drawings)} feature(s) on the map")
+                    
+                    # Show the drawn features
+                    with st.expander("📋 View Drawn Features", expanded=False):
+                        for idx, feature in enumerate(drawings):
+                            st.write(f"**Feature {idx + 1}:**")
+                            st.json(feature, expanded=False)
+                    
+                    # Confirm button
+                    if st.button("✅ Confirm Drawn Polygon", type="primary", use_container_width=True, key="confirm_drawn"):
+                        # Create proper GeoJSON structure
+                        drawn_geojson = {
+                            "type": "FeatureCollection",
+                            "features": drawings
+                        }
+                        
+                        # Save to session state
+                        st.session_state.drawn_boundary_geojson = drawn_geojson
+                        st.session_state.boundary_source = 'drawn'
+                        
+                        st.success(f"✅ Polygon confirmed! {len(drawings)} feature(s) saved.")
+                        st.balloons()
+                        st.rerun()
+                else:
+                    st.info("👆 No drawings yet. Use the drawing tools on the left side of the map.")
+            else:
+                if not st.session_state.get('drawn_boundary_geojson'):
+                    st.info("👆 Start drawing on the map using the tools in the left toolbar.")
+                    
+        except ImportError as ie:
+            st.error(f"❌ Missing required library: {str(ie)}")
+            st.info("💡 Install folium with: `pip install folium`")
+        except Exception as e:
+            st.error(f"❌ Error with drawing tool: {str(e)}")
+            st.info("💡 Tip: Try using the Upload File tab instead or refresh the page.")
+    
+    # Determine which boundary to use
+    final_boundary_geojson = None
+    boundary_ready = False
+    boundary_name = "boundary"
+    
+    if st.session_state.boundary_source == 'upload' and st.session_state.uploaded_boundary_geojson:
+        final_boundary_geojson = st.session_state.uploaded_boundary_geojson
+        boundary_ready = True
+        st.success("✅ Using uploaded boundary file")
+    elif st.session_state.boundary_source == 'drawn' and st.session_state.drawn_boundary_geojson:
+        final_boundary_geojson = st.session_state.drawn_boundary_geojson
+        boundary_ready = True
+        boundary_name = "drawn_polygon"
+        st.success("✅ Using drawn polygon")
+    elif st.session_state.get('boundary_geojson'):  # From database selection
+        final_boundary_geojson = st.session_state.boundary_geojson
+        boundary_ready = True
+        st.success("✅ Using database boundary")
     
     # Show button with appropriate state
     # Check if currently processing

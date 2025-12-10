@@ -1,0 +1,2735 @@
+import streamlit as st
+import json
+import requests
+import pandas as pd
+import geopandas as gpd
+from io import BytesIO
+from config import settings
+import folium
+from streamlit_folium import st_folium
+import math
+import geohash2 as geohash
+from shapely.geometry import box, shape, Polygon
+import logging
+import osmnx as ox
+from collections import Counter
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
+from functools import lru_cache
+
+# API Configuration
+API_BASE_URL = f"http://{settings.API_HOST}:{settings.API_PORT}/api/v1"
+
+# Local cache for OSM data
+osm_cache = {}
+osm_cache_with_ttl = {}
+CACHE_TTL = 3600  # 1 hour cache
+
+# Helper functions extracted from geospatial API
+
+@lru_cache(maxsize=1000)
+def cached_geohash_encode(lat: float, lon: float, precision: int) -> str:
+    """Cached geohash encoding for better performance"""
+    return geohash.encode(lat, lon, precision=precision)
+
+@lru_cache(maxsize=1000) 
+def cached_geohash_to_polygon(geohash_str: str):
+    """Cached geohash to polygon conversion"""
+    lat, lon, lat_err, lon_err = geohash.decode_exactly(geohash_str)
+    return Polygon([
+        (lon - lon_err, lat - lat_err),
+        (lon - lon_err, lat + lat_err),
+        (lon + lon_err, lat + lat_err),
+        (lon + lon_err, lat - lat_err),
+        (lon - lon_err, lat - lat_err)
+    ])
+
+def encode_geohash_batch(geometries, precision):
+    """Vectorized geohash encoding for better performance"""
+    geohashes = []
+    for geom in geometries:
+        try:
+            if geom.is_empty:
+                geohashes.append(None)
+                continue
+            if geom.geom_type == 'Point':
+                point = geom
+            else:
+                point = geom.representative_point()
+            geohashes.append(cached_geohash_encode(point.y, point.x, precision))
+        except:
+            geohashes.append(None)
+    return geohashes
+
+def fetch_poi_data(polygon, tags_dict):
+    """Fetch POI data from OSM"""
+    try:
+        poi_gdf = ox.geometries_from_polygon(polygon, tags=tags_dict)
+        poi_gdf = poi_gdf[poi_gdf.geometry.type.isin(['Point', 'Polygon', 'MultiPolygon'])]
+        return poi_gdf.to_crs("EPSG:4326")
+    except Exception as e:
+        st.warning(f"⚠️ Failed to fetch POI: {e}")
+        return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+
+def fetch_road_data(polygon, road_tags):
+    """Fetch road data from OSM"""
+    try:
+        roads_gdf = ox.geometries_from_polygon(polygon, tags=road_tags)
+        roads_gdf = roads_gdf[roads_gdf.geometry.type.isin(['LineString', 'MultiLineString'])]
+        return roads_gdf.to_crs("EPSG:4326")
+    except Exception as e:
+        st.warning(f"⚠️ Failed to fetch major roads: {e}")
+        return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+
+def geohash_to_bounds(gh):
+    """Convert geohash to bounding box coordinates"""
+    lat, lon, lat_err, lon_err = geohash.decode_exactly(gh)
+    return (lat - lat_err, lat + lat_err, lon - lon_err, lon + lon_err)
+
+# CSS for styling
+st.markdown("""
+    <style>
+    /* Main app background */
+    .stApp {
+        background-color: #F3F6FB;
+    }
+    
+    /* Navbar/header */
+    .css-1rs6os, .css-17ziqus, header[data-testid="stHeader"] {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* Sidebar */
+    .css-1d391kg, .css-1lcbmhc, section[data-testid="stSidebar"] {
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Text color */
+    .stApp, .stApp p, .stApp div, .stApp span, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+        color: #000000 !important;
+    }
+    
+    /* File uploader comprehensive styling */
+    .stFileUploader {
+        background-color: #F3F6FB !important;
+    }
+    
+    .stFileUploader > div {
+        background-color: #F3F6FB !important;
+    }
+    
+    .stFileUploader > div > div {
+        background-color: #F3F6FB !important;
+    }
+    
+    .stFileUploader > div > div > div {
+        background-color: #F3F6FB !important;
+    }
+    
+    .stFileUploader > div > div > div > div {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* File uploader drag and drop zone */
+    div[data-testid="stFileUploader"] {
+        background-color: #F3F6FB !important;
+    }
+    
+    div[data-testid="stFileUploader"] > div {
+        background-color: #F3F6FB !important;
+    }
+    
+    div[data-testid="stFileUploader"] > div > div {
+        background-color: #F3F6FB !important;
+    }
+    
+    div[data-testid="stFileUploader"] > div > div > div {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* File uploader section */
+    section[data-testid="stFileUploader"] {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* Upload area specific CSS classes */
+    .css-1cpxqw2, .css-1erivf3, .css-1v0mbdj, .css-1kyxreq, .css-1d391kg {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* Additional file uploader selectors */
+    [data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* Drag and drop area */
+    .uploadedFile {
+        background-color: #F3F6FB !important;
+    }
+    
+    /* File drop zone */
+    .css-1adrfps {
+        background-color: #F3F6FB !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+def process_complete_geohash_workflow(
+    country_id, 
+    region_data,
+    tag_filters=None,
+    top_percent=0.5,
+    precision=6,
+    chunk_size=15,
+    max_workers=10,
+    use_cache=False,
+    return_geojson=True
+):
+    """
+    Complete workflow function that combines:
+    1. Download Geohash - Convert boundary to geohash6
+    2. Calculate Target UKM - Get road segments for ALL geohash areas (no dense filtering)
+    
+    Parameters:
+    - country_id: ID of the selected country
+    - region_data: Selected region boundary data
+    - tag_filters: List of OSM tags (not used anymore, kept for compatibility)
+    - top_percent: Percentage of top dense geohash to select (not used anymore, kept for compatibility)
+    - precision: Geohash precision level (default: 6)
+    - chunk_size: Chunk size for UKM calculation (default: 15)
+    - max_workers: Number of workers for parallel processing (default: 10)
+    - use_cache: Whether to use cache for API calls (default: False)
+    - return_geojson: Whether to return GeoJSON format (default: True)
+    
+    Returns:
+    - Dictionary containing all results from the workflow steps
+    """
+    
+    result = {
+        'success': False,
+        'step1_geohash': None,
+        'step2_dense_geohash': None,  # Will contain all geohash instead of dense ones
+        'step3_ukm_result': None,
+        'errors': []
+    }
+    
+    try:
+        # STEP 1: Download Geohash - Convert boundary to geohash6        
+        # Extract GeoJSON from region data
+        boundary_geojson = extract_geojson_from_boundary_data({"rows": [region_data]})
+        
+        if not boundary_geojson:
+            result['errors'].append("Failed to extract GeoJSON from boundary data")
+            return result
+        
+        # Convert to geohash6
+        geohash_result = convert_boundary_to_geohash6(boundary_geojson, precision)
+        
+        if not geohash_result or not geohash_result.get("success"):
+            result['errors'].append("Failed to convert boundary to geohash6")
+            return result
+        
+        result['step1_geohash'] = geohash_result
+       
+        # STEP 2: Use ALL geohash cells (no dense filtering)
+        # Convert geohash GeoJSON to GeoDataFrame for consistency with the rest of the code
+        geohash_geojson = geohash_result["geohashes_geojson"]
+        all_geohash_gdf = gpd.GeoDataFrame.from_features(
+            geohash_geojson["features"], 
+            crs="EPSG:4326"
+        )
+        
+        # Add count column (set to 1 for all since we're not doing density analysis)
+        all_geohash_gdf['count'] = 1
+        
+        # Ensure geoHash column exists with correct name
+        if 'geoHash' not in all_geohash_gdf.columns:
+            # Check if it exists with different case or naming
+            geohash_col = None
+            for col in all_geohash_gdf.columns:
+                if col.lower() in ['geohash', 'geo_hash']:
+                    geohash_col = col
+                    break
+            
+            if geohash_col:
+                all_geohash_gdf['geoHash'] = all_geohash_gdf[geohash_col]
+            else:
+                # Extract from properties if not found as direct column
+                all_geohash_gdf['geoHash'] = all_geohash_gdf.apply(
+                    lambda row: row.get('geoHash') if hasattr(row, 'get') else '', axis=1
+                )
+        
+        result['step2_dense_geohash'] = all_geohash_gdf
+        
+        st.info(f"📍 Using ALL {len(all_geohash_gdf)} geohash areas for UKM calculation (no density filtering)")
+        
+        # STEP 3: Calculate Target UKM - Get road segments for ALL geohash areas
+        # Extract geohash list from all geohash result
+        geohash_list = all_geohash_gdf['geoHash'].dropna().astype(str).str.strip().unique().tolist()
+        
+        if not geohash_list:
+            result['errors'].append("No valid geohashes found for UKM calculation")
+            return result
+        
+        # Call UKM calculation API
+        ukm_result = call_backend_calculate_ukm_advanced(
+            geohashes=geohash_list,
+            chunk_size=chunk_size,
+            max_workers=max_workers,
+            use_cache=use_cache,
+            return_geojson=return_geojson
+        )
+        
+        if not ukm_result or not ukm_result.get('success'):
+            result['errors'].append("Failed to calculate UKM")
+            return result
+        
+        result['step3_ukm_result'] = ukm_result
+       
+        result['success'] = True
+        return result
+        
+    except Exception as e:
+        result['errors'].append(f"Unexpected error in workflow: {str(e)}")
+        return result
+
+# Helper functions from the original files
+
+def extract_geojson_from_boundary_data(boundary_data):
+    """Extract GeoJSON from boundary data (now works with local file data)"""
+    try:
+        # Check if we have rows data (from local file)
+        if boundary_data and boundary_data.get("rows"):
+            rows = boundary_data["rows"]
+            
+            # If we only have one row (selected region), extract its geometry
+            if len(rows) == 1:
+                row = rows[0]
+                geometry = row.get("geometry")
+                
+                if geometry:
+                    # Create a proper GeoJSON Feature
+                    geojson = {
+                        "type": "Feature",
+                        "properties": {
+                            "id": row.get("id"),
+                            "NAME": row.get("NAME"),
+                            "TYPE": row.get("TYPE")
+                        },
+                        "geometry": geometry
+                    }
+                    return geojson
+                else:
+                    st.error("❌ No geometry found in boundary data")
+                    return None
+            else:
+                # Multiple rows - create FeatureCollection
+                features = []
+                for row in rows:
+                    geometry = row.get("geometry")
+                    if geometry:
+                        feature = {
+                            "type": "Feature",
+                            "properties": {
+                                "id": row.get("id"),
+                                "NAME": row.get("NAME"),
+                                "TYPE": row.get("TYPE")
+                            },
+                            "geometry": geometry
+                        }
+                        features.append(feature)
+                
+                if features:
+                    geojson = {
+                        "type": "FeatureCollection",
+                        "features": features
+                    }
+                    return geojson
+                else:
+                    st.error("❌ No valid geometries found in boundary data")
+                    return None
+        else:
+            # Fallback: try API method if boundary_data doesn't have the expected format
+            payload = {"boundary_data": boundary_data}
+            response = requests.post(f"{API_BASE_URL}/geospatial/extract-geojson", json=payload)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    return result.get("geojson")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error extracting GeoJSON: {str(e)}")
+        return None
+
+def convert_boundary_to_geohash6(boundary_geojson, precision=6):
+    """Convert boundary to geohash grid (local implementation)"""
+    try:
+        # Prepare the geometry
+        if boundary_geojson.get("type") == "FeatureCollection" and boundary_geojson.get("features"):
+            geometry_data = boundary_geojson["features"][0]["geometry"]
+        elif boundary_geojson.get("type") == "Feature":
+            geometry_data = boundary_geojson["geometry"]
+        else:
+            geometry_data = boundary_geojson
+        
+        # Convert to shapely geometry
+        boundary_geom = shape(geometry_data)
+        
+        # Get bounding box
+        minx, miny, maxx, maxy = boundary_geom.bounds
+        
+        # Generate geohash grid
+        # Use set to track unique geohashes and avoid duplicates
+        unique_geohashes = set()
+        geohash_features = []
+        
+        # Calculate step size based on precision (more conservative to ensure coverage)
+        lat_step = 0.008 if precision == 5 else 0.003 if precision == 6 else 0.001
+        lon_step = 0.008 if precision == 5 else 0.003 if precision == 6 else 0.001
+        
+        # Generate grid points
+        current_lat = miny
+        while current_lat <= maxy:
+            current_lon = minx
+            while current_lon <= maxx:
+                # Create point and get geohash
+                point_geohash = geohash.encode(current_lat, current_lon, precision)
+                
+                # Skip if this geohash already processed
+                if point_geohash in unique_geohashes:
+                    current_lon += lon_step
+                    continue
+                
+                # Decode back to get the geohash polygon bounds
+                decoded_lat, decoded_lon, lat_err, lon_err = geohash.decode_exactly(point_geohash)
+                
+                # Create geohash bounding box
+                geohash_box = box(
+                    decoded_lon - lon_err, decoded_lat - lat_err,
+                    decoded_lon + lon_err, decoded_lat + lat_err
+                )
+                
+                # Check if geohash intersects with boundary
+                if boundary_geom.intersects(geohash_box):
+                    # Add to unique set
+                    unique_geohashes.add(point_geohash)
+                    
+                    # Calculate center point
+                    center_lat = decoded_lat
+                    center_lon = decoded_lon
+                    
+                    geohash_features.append({
+                        "type": "Feature",
+                        "properties": {
+                            "geoHash": point_geohash,
+                            "center_lat": center_lat,
+                            "center_lon": center_lon
+                        },
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [decoded_lon - lon_err, decoded_lat - lat_err],
+                                [decoded_lon + lon_err, decoded_lat - lat_err],
+                                [decoded_lon + lon_err, decoded_lat + lat_err],
+                                [decoded_lon - lon_err, decoded_lat + lat_err],
+                                [decoded_lon - lon_err, decoded_lat - lat_err]
+                            ]]
+                        }
+                    })
+                
+                current_lon += lon_step
+            current_lat += lat_step
+        
+        # Create GeoJSON FeatureCollection
+        result = {
+            "type": "FeatureCollection",
+            "features": geohash_features
+        }
+        
+        st.info(f"Generated {len(unique_geohashes)} unique geohashes (precision {precision})")
+        
+        return {
+            "success": True,
+            "geohash_count": len(unique_geohashes),
+            "precision": precision,
+            "geohashes_geojson": result
+        }
+        
+    except Exception as e:
+        st.error(f"Error converting to geohash: {str(e)}")
+        return None
+
+def call_select_dense_geohash_api(boundary_data, tag_filters, top_percent=0.5, precision=6):
+    """Select dense geohash areas from boundary using OSM data (local implementation)"""
+    try:
+        with st.spinner("🔄 Analyzing dense areas..."):
+            # 1. Convert GeoJSON to GeoDataFrame (read boundary)
+            # Handle both single geometry and FeatureCollection (from geohash GeoJSON)
+            if boundary_data.get("type") == "FeatureCollection":
+                # If it's a FeatureCollection (e.g., from geohash GeoJSON), use all features
+                boundary_gdf = gpd.GeoDataFrame.from_features(
+                    boundary_data["features"], 
+                    crs="EPSG:4326"
+                )
+            elif boundary_data.get("type") == "Feature":
+                # If it's a single Feature
+                boundary_gdf = gpd.GeoDataFrame.from_features([boundary_data], crs="EPSG:4326")
+            else:
+                # If it's just a geometry object
+                boundary_gdf = gpd.GeoDataFrame.from_features([{
+                    "type": "Feature",
+                    "geometry": boundary_data,
+                    "properties": {}
+                }], crs="EPSG:4326")
+            
+            # Create union of all boundary polygons
+            polygon = boundary_gdf.unary_union
+
+            # 2. Fetch POI and road data
+            st.info("📡 Fetching OSM data...")
+            tags_dict = {tag: True for tag in tag_filters}
+            road_tags = {'highway': ['motorway', 'trunk', 'primary', 'secondary']}
+            
+            # Fetch data
+            poi_gdf = fetch_poi_data(polygon, tags_dict)
+            roads_gdf = fetch_road_data(polygon, road_tags)
+
+            # 4. Combine POI and roads data
+            st.info(f"📊 Found {len(poi_gdf)} POI features and {len(roads_gdf)} road features")
+            all_gdf = pd.concat([poi_gdf, roads_gdf], ignore_index=True)
+            if all_gdf.empty:
+                st.error("❌ No POI or road data found.")
+                return None
+            
+            st.info(f"🔄 Processing {len(all_gdf)} total features...")
+
+            # 5. Encode to geohash (optimized batch processing)
+            st.info("🔢 Encoding geometries to geohash...")
+            all_gdf['geohash'] = encode_geohash_batch(all_gdf.geometry, precision)
+            all_gdf = all_gdf.dropna(subset=['geohash'])
+            all_gdf = all_gdf[all_gdf['geohash'].apply(lambda x: isinstance(x, str))]
+
+            # 6. Count objects per geohash
+            st.info("📈 Calculating geohash density...")
+            count_df = all_gdf.groupby('geohash').size().reset_index(name='count')
+            threshold = count_df['count'].quantile(1 - top_percent)
+            dense_df = count_df[count_df['count'] >= threshold]
+            
+            st.info(f"📍 Selected {len(dense_df)} dense geohash areas (threshold: {threshold:.1f})")
+            
+            # Early exit if no dense areas found
+            if dense_df.empty:
+                st.warning("⚠️ No dense areas found with current threshold")
+                return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+
+            # 7. Add geohash that become "centers" of dense neighbors (optimized)
+            st.info("📍 Finding missing center geohash areas...")
+            def add_missing_centers_optimized(df):
+                # Use set for faster lookups
+                existing_geohashes = set(df['geohash'].values)
+                all_neighbors = []
+                
+                # Batch process neighbors
+                for gh in df['geohash']:
+                    try:
+                        nbs = geohash.neighbors(gh)
+                        all_neighbors.extend(nbs)
+                    except:
+                        continue
+                
+                # Use Counter for frequency count
+                freq = Counter(all_neighbors)
+                
+                # Find missing centers more efficiently
+                missing = [g for g, count in freq.items() 
+                          if g not in existing_geohashes and count >= 2]
+                
+                if missing:
+                    df_extra = count_df[count_df['geohash'].isin(missing)]
+                    return pd.concat([df, df_extra], ignore_index=True)
+                return df
+
+            dense_df = add_missing_centers_optimized(dense_df)
+
+            # 8. Convert geohash to polygon (using cached function)
+            st.info("🔄 Converting geohash to polygons...")
+            dense_gdf = gpd.GeoDataFrame({
+                'geoHash': dense_df['geohash'],
+                'count': dense_df['count'],
+                'geometry': dense_df['geohash'].apply(cached_geohash_to_polygon)
+            }, crs='EPSG:4326')
+
+            # 9. Remove spatial outliers
+            st.info("🧹 Removing outlier geohash areas...")
+            dense_union = dense_gdf.unary_union
+            if dense_union.geom_type == 'MultiPolygon':
+                largest = max(dense_union.geoms, key=lambda g: g.area)
+            else:
+                largest = dense_union
+            dense_gdf = dense_gdf[dense_gdf.geometry.intersects(largest)]
+
+            st.success(f"✅ Dense geohash analysis completed. Found {len(dense_gdf)} dense areas.")
+            return dense_gdf
+            
+    except Exception as e:
+        st.error(f"❌ Error in dense geohash selection: {str(e)}")
+        return None
+
+def fetch_roads_for_geohash(geohash_str):
+    """Fetch and clip roads for a single geohash"""
+    try:
+        south, north, west, east = geohash_to_bounds(geohash_str)
+        polygon = box(west, south, east, north)
+        
+        # Define road tags for UKM calculation
+        tags = {
+            "highway": [
+                "motorway", "motorway_link", "secondary", "secondary_link",
+                "primary", "primary_link", "residential", "trunk", "trunk_link",
+                "tertiary", "tertiary_link", "living_street", "service", "unclassified"
+            ]
+        }
+        
+        # Fetch road data from OSM
+        gdf_all = ox.features_from_bbox(north, south, east, west, tags=tags)
+        gdf_lines = gdf_all[gdf_all.geometry.type.isin(["LineString", "MultiLineString"])]
+        
+        # Clip to geohash bounds
+        gdf_clipped = gpd.clip(gdf_lines, polygon)
+        
+        if not gdf_clipped.empty:
+            return gdf_clipped.to_crs("EPSG:4326")
+        else:
+            return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+            
+    except Exception as e:
+        st.warning(f"⚠️ Failed to fetch roads for geohash {geohash_str}: {e}")
+        return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+
+def call_backend_calculate_ukm_advanced(geohashes, chunk_size=15, max_workers=10, use_cache=False, return_geojson=True):
+    """Calculate target UKM by fetching and clipping roads from geohash areas (local implementation)"""
+    try:
+        start_time = time.time()
+        
+        if not geohashes:
+            st.error("❌ No geohashes provided")
+            return None
+        
+        # Filter to valid 6-character geohashes
+        valid_geohashes = [gh for gh in geohashes if len(str(gh).strip()) == 6]
+        
+        if not valid_geohashes:
+            st.error("❌ No valid 6-character geohashes found")
+            return None
+        
+        with st.spinner(f"🔍 Processing {len(valid_geohashes)} geohashes for UKM calculation..."):
+            st.info(f"🚀 Advanced UKM processing: {len(valid_geohashes)} geohashes")
+            
+            # Process roads in chunks for better performance and UI feedback
+            all_results = []
+            total_failed = 0
+            
+            chunks = [valid_geohashes[i:i + chunk_size] for i in range(0, len(valid_geohashes), chunk_size)]
+            
+            for chunk_idx, chunk in enumerate(chunks):
+                st.info(f"📦 Processing chunk {chunk_idx + 1}/{len(chunks)} with {len(chunk)} geohashes")
+                
+                chunk_results = []
+                chunk_failed = 0
+                
+                # Process each geohash in the chunk
+                for geohash_str in chunk:
+                    try:
+                        road_gdf = fetch_roads_for_geohash(geohash_str)
+                        if not road_gdf.empty:
+                            chunk_results.append(road_gdf)
+                        else:
+                            chunk_failed += 1
+                    except Exception as e:
+                        st.warning(f"⚠️ Failed to process geohash {geohash_str}: {e}")
+                        chunk_failed += 1
+                
+                all_results.extend(chunk_results)
+                total_failed += chunk_failed
+                
+                st.info(f"✅ Chunk {chunk_idx + 1} completed: {len(chunk_results)} valid, {chunk_failed} failed")
+            
+            st.info(f"🎯 Total processing completed: {len(all_results)} valid results, {total_failed} failed")
+            
+            # Combine all road segments
+            if all_results:
+                st.info(f"✅ Successfully processed {len(all_results)} geohashes")
+                combined_roads = pd.concat(all_results, ignore_index=True)
+                
+                # Calculate total length in kilometers (using metric projection)
+                roads_metric = combined_roads.to_crs(epsg=3857)
+                total_length_km = roads_metric.length.sum() / 1000
+                
+                # Convert back to WGS84 for response
+                combined_roads = combined_roads.to_crs(epsg=4326)
+                
+                # Convert to GeoJSON for response if requested
+                roads_geojson = None
+                if return_geojson:
+                    roads_geojson = json.loads(combined_roads.to_json())
+                
+                processing_time = time.time() - start_time
+                st.success(f"🎯 UKM calculation completed in {processing_time:.2f}s")
+                st.info(f"📊 Total road length: {total_length_km:.2f} km from {len(combined_roads)} segments")
+                
+                return {
+                    "success": True,
+                    "total_road_segments": len(combined_roads),
+                    "total_road_length_km": round(total_length_km, 2),
+                    "processed_geohashes": len(valid_geohashes) - total_failed,
+                    "failed_geohashes": total_failed,
+                    "processing_time_seconds": round(processing_time, 2),
+                    "cache_hits": 0,  # Not implemented for local version
+                    "cache_misses": len(valid_geohashes),
+                    "roads_geojson": roads_geojson
+                }
+            else:
+                st.warning("⚠️ No roads found in any geohash areas")
+                return {
+                    "success": True,
+                    "total_road_segments": 0,
+                    "total_road_length_km": 0.0,
+                    "processed_geohashes": 0,
+                    "failed_geohashes": len(valid_geohashes),
+                    "processing_time_seconds": round(time.time() - start_time, 2),
+                    "cache_hits": 0,
+                    "cache_misses": 0,
+                    "roads_geojson": {"type": "FeatureCollection", "features": []} if return_geojson else None
+                }
+                
+    except Exception as e:
+        st.error(f"❌ Error in UKM calculation: {str(e)}")
+        return None
+
+def get_countries():
+    """Get list of available countries from local file"""
+    try:
+        # Check if the Indonesia boundary file exists
+        import os
+        boundary_file = "files/id_boundary_regency.geojson"
+        
+        if os.path.exists(boundary_file):
+            # Return Indonesia as the only available country since we have its data
+            return [{"id": 1, "name": "Indonesia"}]
+        else:
+            st.warning("⚠️ Indonesia boundary file not found. Using fallback data.")
+            return get_fallback_countries_simple()
+    except Exception as e:
+        st.warning(f"⚠️ Error loading country data: {str(e)}. Using fallback data.")
+        return get_fallback_countries_simple()
+
+def get_fallback_countries_simple():
+    """Fallback country data when local file is unavailable"""
+    return [
+        {"id": 1, "name": "Indonesia"},
+        {"id": 2, "name": "Malaysia"}, 
+        {"id": 3, "name": "Thailand"},
+        {"id": 4, "name": "United States"},
+        {"id": 5, "name": "Singapore"},
+        {"id": 6, "name": "Vietnam"},
+        {"id": 7, "name": "Philippines"},
+        {"id": 8, "name": "India"}
+    ]
+
+def get_boundary_data(country_id):
+    """Get boundary data for a specific country from local file"""
+    try:
+        # Only support Indonesia (country_id = 1) from local file
+        if country_id == 1:
+            return load_indonesia_boundary_data()
+        else:
+            st.error(f"Only Indonesia (ID=1) is supported with local boundary data")
+            return None
+    except Exception as e:
+        st.error(f"Error getting boundary data: {str(e)}")
+        return None
+
+def load_indonesia_boundary_data():
+    """Load Indonesia regency boundary data from local GeoJSON file"""
+    try:
+        import json
+        import os
+        
+        boundary_file = "files/id_boundary_regency.geojson"
+        
+        if not os.path.exists(boundary_file):
+            st.error(f"❌ Boundary file not found: {boundary_file}")
+            return None
+        
+        # Load the GeoJSON file
+        with open(boundary_file, 'r', encoding='utf-8') as f:
+            geojson_data = json.load(f)
+        
+        # Extract features and convert to the expected format
+        if geojson_data.get("type") == "FeatureCollection" and geojson_data.get("features"):
+            features = geojson_data["features"]
+            
+            # Convert GeoJSON features to the format expected by the UI
+            rows = []
+            for feature in features:
+                properties = feature.get("properties", {})
+                geometry = feature.get("geometry", {})
+                
+                # Create a row in the expected format
+                row = {
+                    "id": properties.get("id"),
+                    "NAME": properties.get("NAME"),
+                    "TYPE": properties.get("TYPE"),
+                    "geometry": geometry  # Include the full geometry
+                }
+                rows.append(row)
+            
+            return {"rows": rows}
+        else:
+            st.error("❌ Invalid GeoJSON format in boundary file")
+            return None
+            
+    except FileNotFoundError:
+        st.error(f"❌ Boundary file not found: files/id_boundary_regency.geojson")
+        return None
+    except json.JSONDecodeError as e:
+        st.error(f"❌ Error parsing JSON file: {str(e)}")
+        return None
+    except Exception as e:
+        st.error(f"❌ Error loading boundary data: {str(e)}")
+        return None
+
+def get_bounds_from_geojson(geojson):
+    """Calculate bounds from GeoJSON for map fitting (local implementation)"""
+    try:
+        if not geojson:
+            return None
+        
+        # Handle different GeoJSON types
+        if geojson.get('type') == 'FeatureCollection' and geojson.get('features'):
+            features = geojson['features']
+        elif geojson.get('type') == 'Feature':
+            features = [geojson]
+        else:
+            # Assume it's a geometry object
+            features = [{"type": "Feature", "geometry": geojson, "properties": {}}]
+        
+        if not features:
+            return None
+        
+        # Initialize bounds with first feature
+        min_lon = float('inf')
+        min_lat = float('inf')
+        max_lon = float('-inf')
+        max_lat = float('-inf')
+        
+        # Calculate bounds from all features
+        for feature in features:
+            geometry = feature.get('geometry')
+            if not geometry:
+                continue
+            
+            # Use shapely to get bounds
+            geom = shape(geometry)
+            bounds = geom.bounds  # (minx, miny, maxx, maxy)
+            
+            min_lon = min(min_lon, bounds[0])
+            min_lat = min(min_lat, bounds[1])
+            max_lon = max(max_lon, bounds[2])
+            max_lat = max(max_lat, bounds[3])
+        
+        # Check if we found valid bounds
+        if min_lon == float('inf') or min_lat == float('inf'):
+            return None
+        
+        # Return bounds in the format expected by the map
+        # [[min_lat, min_lon], [max_lat, max_lon]]
+        return [[min_lat, min_lon], [max_lat, max_lon]]
+        
+    except Exception as e:
+        st.error(f"Error calculating bounds: {str(e)}")
+        return None
+
+def create_workflow_map(boundary_geojson=None, dense_geohash_gdf=None, roads_geojson=None):
+    """Create folium map with boundary, dense geohash, and roads data"""
+    # Create base map centered on Indonesia with white background
+    m = folium.Map(
+        location=[-2.5, 117.5], 
+        zoom_start=5,
+        tiles='OpenStreetMap',
+        prefer_canvas=True
+    )
+    
+    # Add custom CSS to force white background
+    map_css = """
+    <style>
+    .leaflet-container {
+        background-color: #FFFFFF !important;
+        background: #FFFFFF !important;
+    }
+    .leaflet-tile-pane {
+        background-color: #FFFFFF !important;
+    }
+    .leaflet-map-pane {
+        background-color: #FFFFFF !important;
+    }
+    </style>
+    """
+    m.get_root().html.add_child(folium.Element(map_css))
+    
+    # Collect all bounds to fit the map properly
+    all_bounds = []
+    
+    # Add boundary layer if available
+    if boundary_geojson:
+        bounds = get_bounds_from_geojson(boundary_geojson)
+        if bounds:
+            all_bounds.append(bounds)
+        
+        folium.GeoJson(
+            boundary_geojson,
+            name="All Geohash Areas",
+            style_function=lambda x: {
+                "color": "#2E86AB", 
+                "weight": 3, 
+                "fillOpacity": 0.1,
+                "fillColor": "#2E86AB",
+                "dashArray": "5, 5"
+            }
+        ).add_to(m)
+    
+    # Add dense geohash layer if available
+    if dense_geohash_gdf is not None and not dense_geohash_gdf.empty:
+        # Convert GeoDataFrame to GeoJSON
+        dense_geojson = json.loads(dense_geohash_gdf.to_json())
+        
+        # Get bounds from dense geohash
+        dense_bounds = get_bounds_from_geojson(dense_geojson)
+        if dense_bounds:
+            all_bounds.append(dense_bounds)
+        
+        folium.GeoJson(
+            dense_geojson,
+            name="All Geohash Areas",
+            style_function=lambda x: {
+                "color": "#A23B72", 
+                "weight": 2, 
+                "fillOpacity": 0.6,
+                "fillColor": "#A23B72"
+            },
+            popup=folium.GeoJsonPopup(
+                fields=['geoHash', 'count'],
+                aliases=['Geohash:', 'Count:'],
+                localize=True,
+                labels=True
+            )
+        ).add_to(m)
+    
+    # Add roads layer if available
+    if roads_geojson:
+        # Get bounds from roads
+        roads_bounds = get_bounds_from_geojson(roads_geojson)
+        if roads_bounds:
+            all_bounds.append(roads_bounds)
+            
+        folium.GeoJson(
+            roads_geojson,
+            name="Road Plan",
+            style_function=lambda x: {
+                "color": "#F18F01", 
+                "weight": 2, 
+                "opacity": 0.8
+            },
+            popup=folium.GeoJsonPopup(
+                fields=['highway', 'name'],
+                aliases=['Road Type:', 'Road Name:'],
+                localize=True,
+                labels=True
+            )
+        ).add_to(m)
+    
+    # Fit map to all data with proper padding
+    if all_bounds:
+        # Calculate combined bounds
+        min_lat = min(bound[0][0] for bound in all_bounds)
+        min_lon = min(bound[0][1] for bound in all_bounds)
+        max_lat = max(bound[1][0] for bound in all_bounds)
+        max_lon = max(bound[1][1] for bound in all_bounds)
+        
+        # Calculate margins - ensure minimum margin for very small areas
+        lat_range = max_lat - min_lat
+        lon_range = max_lon - min_lon
+        
+        # Use larger margin for very small areas, smaller for large areas
+        if lat_range < 0.01 and lon_range < 0.01:  # Very small area
+            lat_margin = 0.01
+            lon_margin = 0.01
+        elif lat_range < 0.1 and lon_range < 0.1:  # Small area
+            lat_margin = max(lat_range * 0.2, 0.005)
+            lon_margin = max(lon_range * 0.2, 0.005)
+        else:  # Normal or large area
+            lat_margin = lat_range * 0.05
+            lon_margin = lon_range * 0.05
+        
+        padded_bounds = [
+            [min_lat - lat_margin, min_lon - lon_margin],
+            [max_lat + lat_margin, max_lon + lon_margin]
+        ]
+        
+        m.fit_bounds(padded_bounds)
+    
+    # Add layer control (can be collapsed/expanded)
+    folium.LayerControl(collapsed=True).add_to(m)
+    
+    # Add a mini map (optional - if plugins available)
+    try:
+        minimap = folium.plugins.MiniMap(toggle_display=True)
+        m.add_child(minimap)
+    except:
+        pass  # Skip minimap if not available
+    
+    return m
+
+
+
+# Forecast Budget Functions
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_countries_pricing():
+    """Get all countries with their pricing information from API"""
+    try:
+        api_url = f"http://{settings.API_HOST}:{settings.API_PORT}/api/v1/country/pricing"
+        response = requests.get(api_url, timeout=30)
+        
+        if response.status_code == 200:
+            countries = response.json()
+            
+            if countries and len(countries) > 0:
+                # Map API field names to simplified names
+                mapped_countries = []
+                for country in countries:
+                    # Get country name to determine appropriate defaults
+                    country_name = country.get("name", "Unknown Country")
+                    
+                    # Country-specific defaults
+                    if country_name.lower() == "indonesia":
+                        default_ukm = 8000.0
+                        default_insurance = 132200.0
+                        default_dataplan = 400000.0
+                        default_currency = "IDR"
+                        default_symbol = "Rp"
+                        default_exchange = 0.000063
+                    else:
+                        # Generic defaults for other countries
+                        default_ukm = 0.25
+                        default_insurance = 8.5
+                        default_dataplan = 30.0
+                        default_currency = "USD"
+                        default_symbol = "$"
+                        default_exchange = 1.0
+                    
+                    # Provide better fallback values to prevent None issues
+                    mapped_country = {
+                        "id": country.get("id"),
+                        "name": country_name,
+                        "currency": country.get("currency", default_currency),
+                        "currency_symbol": country.get("currency_symbol", default_symbol),
+                        "ukm_price": country.get("ukm_price", default_ukm),
+                        "insurance": country.get("insurance_per_dax_per_month", country.get("insurance", default_insurance)),
+                        "dataplan": country.get("dataplan_per_dax_per_month", country.get("dataplan", default_dataplan)),
+                        "exchange_rate_to_usd": country.get("exchange_rate_to_usd", default_exchange)
+                    }
+                    mapped_countries.append(mapped_country)
+                
+                return mapped_countries
+            else:
+                st.warning("⚠️ API returned empty countries list - using fallback")
+                return get_fallback_countries()
+        else:
+            st.error(f"❌ API Error {response.status_code}: {response.text[:200]}...")
+            return get_fallback_countries()
+            
+    except Exception as e:
+        st.error(f"❌ API Connection Error: {str(e)}")
+        return get_fallback_countries()
+
+def get_fallback_countries():
+    """Fallback country data when API is unavailable"""
+    return [
+        {
+            "id": 1,
+            "name": "Indonesia",
+            "currency": "IDR",
+            "currency_symbol": "Rp",
+            "ukm_price": 8000.0,
+            "insurance": 132200.0,
+            "dataplan": 400000.0,
+            "exchange_rate_to_usd": 0.000063
+        },
+        {
+            "id": 2,
+            "name": "Malaysia", 
+            "currency": "MYR",
+            "currency_symbol": "RM",
+            "ukm_price": 2.0,
+            "insurance": 35.0,
+            "dataplan": 120.0,
+            "exchange_rate_to_usd": 0.22
+        },
+        {
+            "id": 3,
+            "name": "Thailand",
+            "currency": "THB", 
+            "currency_symbol": "฿",
+            "ukm_price": 90.0,
+            "insurance": 1200.0,
+            "dataplan": 4000.0,
+            "exchange_rate_to_usd": 0.029
+        },
+        {
+            "id": 4,
+            "name": "United States",
+            "currency": "USD",
+            "currency_symbol": "$", 
+            "ukm_price": 0.25,
+            "insurance": 8.5,
+            "dataplan": 30.0,
+            "exchange_rate_to_usd": 1.0
+        },
+        {
+            "id": 5,
+            "name": "Singapore",
+            "currency": "SGD",
+            "currency_symbol": "S$",
+            "ukm_price": 0.35,
+            "insurance": 12.0,
+            "dataplan": 40.0,
+            "exchange_rate_to_usd": 0.74
+        },
+        {
+            "id": 6,
+            "name": "Vietnam",
+            "currency": "VND",
+            "currency_symbol": "₫",
+            "ukm_price": 6000.0,
+            "insurance": 80000.0,
+            "dataplan": 300000.0,
+            "exchange_rate_to_usd": 0.000041
+        },
+        {
+            "id": 7,
+            "name": "Philippines",
+            "currency": "PHP",
+            "currency_symbol": "₱",
+            "ukm_price": 15.0,
+            "insurance": 200.0,
+            "dataplan": 800.0,
+            "exchange_rate_to_usd": 0.018
+        },
+        {
+            "id": 8,
+            "name": "India",
+            "currency": "INR",
+            "currency_symbol": "₹",
+            "ukm_price": 20.0,
+            "insurance": 250.0,
+            "dataplan": 1000.0,
+            "exchange_rate_to_usd": 0.012
+        }
+    ]
+
+def format_currency(amount, currency="USD", symbol="$"):
+    """Format currency with proper symbol and decimal places"""
+    # Handle None or invalid values
+    if amount is None:
+        amount = 0
+    
+    # Ensure amount is numeric
+    try:
+        amount = float(amount)
+    except (ValueError, TypeError):
+        amount = 0
+    
+    # Handle None symbol
+    if symbol is None:
+        symbol = "$"
+    
+    # Handle None currency
+    if currency is None:
+        currency = "USD"
+    
+    if currency in ["IDR"]:
+        return f"{symbol} {amount:,.0f}"
+    else:
+        return f"{symbol} {amount:,.2f}"
+
+def forecast_budget_simple(target_km, dax_number, country_data):
+    """Calculate forecast budget using country pricing with automatic week to month calculation"""
+    # First calculate week estimation using formula: target_km / (dax_count * 100)
+    week_estimation = target_km / (dax_number * 100)
+    
+    # Then convert to months using ceiling (always round up any fraction)
+    month_estimation = math.ceil(week_estimation / 4)
+    
+    # Ensure minimum 1 month
+    if month_estimation < 1:
+        month_estimation = 1
+    
+    # Add validation and fallback values to prevent None errors with country-specific defaults
+    country_name = country_data.get('name', '').lower()
+    
+    # Indonesia-specific defaults
+    if 'indonesia' in country_name:
+        default_ukm = 8000.0
+        default_insurance = 132200.0
+        default_dataplan = 400000.0
+        default_currency = 'IDR'
+        default_symbol = 'Rp'
+        default_exchange = 0.000063
+    else:
+        # Generic defaults for other countries
+        default_ukm = 0.25
+        default_insurance = 8.5
+        default_dataplan = 30.0
+        default_currency = 'USD'
+        default_symbol = '$'
+        default_exchange = 1.0
+    
+    ukm_price = country_data.get('ukm_price', default_ukm) or default_ukm
+    insurance_rate = country_data.get('insurance', default_insurance) or default_insurance
+    dataplan_rate = country_data.get('dataplan', default_dataplan) or default_dataplan
+    currency = country_data.get('currency', default_currency) or default_currency
+    currency_symbol = country_data.get('currency_symbol', default_symbol) or default_symbol
+    exchange_rate = country_data.get('exchange_rate_to_usd', default_exchange) or default_exchange
+    
+    basic_incentive = target_km * ukm_price
+    bonus_coverage = basic_incentive
+    insurance = insurance_rate * dax_number * month_estimation
+    dataplan = dataplan_rate * dax_number * month_estimation
+    
+    total_before_misc = basic_incentive + bonus_coverage + insurance + dataplan
+    miscellaneous = total_before_misc * 0.05
+    total_forecast = total_before_misc + miscellaneous
+    total_forecast_usd = total_forecast * exchange_rate
+    
+    return {
+        "Week Estimation": round(week_estimation, 2),
+        "Month Estimation": month_estimation,
+        "Basic Incentive": round(basic_incentive),
+        ">95% Bonus Coverage": round(bonus_coverage),
+        "Insurance": round(insurance),
+        "Dataplan": round(dataplan),
+        "Miscellaneous (5%)": round(miscellaneous),
+        "Total Forecast Budget": round(total_forecast),
+        "Total Forecast Budget (USD)": round(total_forecast_usd, 2),
+        "Currency": currency,
+        "Symbol": currency_symbol,
+        "Country": country_data['name']
+    }
+
+def forecast_budget_custom(target_km, dax_number, custom_params):
+    """Calculate forecast budget using custom parameters"""
+    # First calculate week estimation using formula: target_km / (dax_count * 100)
+    week_estimation = target_km / (dax_number * 100)
+    
+    # Then convert to months using ceiling (always round up any fraction)
+    month_estimation = math.ceil(week_estimation / 4)
+    
+    # Ensure minimum 1 month
+    if month_estimation < 1:
+        month_estimation = 1
+    
+    # Use custom parameters
+    ukm_price = custom_params['ukm_price']
+    insurance_rate = custom_params['insurance_rate']
+    dataplan_rate = custom_params['dataplan_rate']
+    currency = custom_params['currency']
+    currency_symbol = custom_params['currency_symbol']
+    exchange_rate = custom_params['exchange_rate_to_usd']
+    
+    # Use custom basic incentive if provided, otherwise calculate automatically
+    custom_basic_incentive = custom_params.get('custom_basic_incentive')
+    if custom_basic_incentive is not None:
+        basic_incentive = custom_basic_incentive
+    else:
+        basic_incentive = target_km * ukm_price
+    
+    bonus_coverage = basic_incentive
+    insurance = insurance_rate * dax_number * month_estimation
+    dataplan = dataplan_rate * dax_number * month_estimation
+    
+    total_before_misc = basic_incentive + bonus_coverage + insurance + dataplan
+    miscellaneous = total_before_misc * 0.05
+    total_forecast = total_before_misc + miscellaneous
+    total_forecast_usd = total_forecast * exchange_rate
+    
+    return {
+        "Week Estimation": round(week_estimation, 2),
+        "Month Estimation": month_estimation,
+        "Basic Incentive": round(basic_incentive),
+        ">95% Bonus Coverage": round(bonus_coverage),
+        "Insurance": round(insurance),
+        "Dataplan": round(dataplan),
+        "Miscellaneous (5%)": round(miscellaneous),
+        "Total Forecast Budget": round(total_forecast),
+        "Total Forecast Budget (USD)": round(total_forecast_usd, 2),
+        "Currency": currency,
+        "Symbol": currency_symbol,
+        "Country": custom_params.get('country_name', 'Custom')
+    }
+
+# Initialize session state for persistent results (must be at module level)
+if 'workflow_result' not in st.session_state:
+    st.session_state.workflow_result = None
+if 'selected_country_info' not in st.session_state:
+    st.session_state.selected_country_info = None
+if 'selected_region_info' not in st.session_state:
+    st.session_state.selected_region_info = None
+if 'budget_result' not in st.session_state:
+    st.session_state.budget_result = None
+if 'is_processing' not in st.session_state:
+    st.session_state.is_processing = False
+
+# Example usage function for Streamlit UI
+def streamlit_complete_workflow_ui():
+    # Custom CSS for background color and text
+    st.markdown("""
+    <style>
+    .stApp {
+        background-color: #F3F6FB;
+        color: #000000;
+    }
+    .main .block-container {
+        background-color: #F3F6FB;
+        color: #000000;
+    }
+    .css-1d391kg {
+        background-color: #F3F6FB;
+        color: #000000;
+    }
+    .css-1y4p8pa {
+        background-color: #F3F6FB;
+        color: #000000;
+    }
+    .sidebar .sidebar-content {
+        background-color: #F3F6FB;
+        color: #000000;
+    }
+    .css-17eq0hr {
+        background-color: #F3F6FB;
+        color: #000000;
+    }
+    section[data-testid="stSidebar"] {
+        background-color: #F3F6FB;
+        color: #000000;
+    }
+    /* Text elements */
+    .stMarkdown, .stText, p, span, div, h1, h2, h3, h4, h5, h6 {
+        color: #000000 !important;
+    }
+    /* Selectbox and input text */
+    .stSelectbox label, .stNumberInput label, .stTextInput label {
+        color: #000000 !important;
+    }
+    /* Button text - keep default styling for contrast */
+    .stButton button {
+        color: inherit;
+    }
+    /* Metric labels and values */
+    .metric-container {
+        color: #000000 !important;
+    }
+    [data-testid="metric-container"] {
+        color: #000000 !important;
+    }
+    /* Navbar/Header styling */
+    .css-18e3th9 {
+        background-color: #F3F6FB !important;
+    }
+    .css-1d391kg {
+        background-color: #F3F6FB !important;
+    }
+    header[data-testid="stHeader"] {
+        background-color: #F3F6FB !important;
+    }
+    .css-1rs6os {
+        background-color: #F3F6FB !important;
+    }
+    .css-10trblm {
+        background-color: #F3F6FB !important;
+    }
+    /* Streamlit header */
+    .css-1y0tads {
+        background-color: #F3F6FB !important;
+    }
+    /* Dropdown/Selectbox styling */
+    .stSelectbox > div > div {
+        background-color: #FFFFFF !important;
+    }
+    .css-1wa3eu0-placeholder {
+        background-color: #FFFFFF !important;
+    }
+    .css-26l3qy-menu {
+        background-color: #FFFFFF !important;
+    }
+    .css-1uccc91-singleValue {
+        color: #000000 !important;
+    }
+    .css-1n7v3ny-option {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    .css-1n7v3ny-option:hover {
+        background-color: #F0F0F0 !important;
+    }
+    /* Dropdown when opened/focused */
+    .css-1pahdxg-control--is-focused {
+        background-color: #FFFFFF !important;
+        border-color: #2196F3 !important;
+    }
+    .css-1hwfws3 {
+        background-color: #FFFFFF !important;
+    }
+    .css-1pahdxg-control {
+        background-color: #FFFFFF !important;
+    }
+    .css-1s2u09g-control {
+        background-color: #FFFFFF !important;
+    }
+    .css-1s2u09g-control--is-focused {
+        background-color: #FFFFFF !important;
+        border-color: #2196F3 !important;
+        box-shadow: 0 0 0 1px #2196F3 !important;
+    }
+    /* Dropdown menu list */
+    .css-26l3qy-menu-list {
+        background-color: #FFFFFF !important;
+    }
+    .css-1n7v3ny-option--is-focused {
+        background-color: #E3F2FD !important;
+        color: #000000 !important;
+    }
+    .css-1n7v3ny-option--is-selected {
+        background-color: #2196F3 !important;
+        color: #FFFFFF !important;
+    }
+    /* Dropdown container background */
+    .stSelectbox div[data-baseweb="select"] > div {
+        background-color: #FFFFFF !important;
+    }
+    div[data-testid="stSelectbox"] > div {
+        background-color: #FFFFFF !important;
+    }
+    div[data-testid="stSelectbox"] > div > div {
+        background-color: #FFFFFF !important;
+    }
+    /* Modern Streamlit dropdown container */
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+        background-color: #FFFFFF !important;
+    }
+    /* Dropdown menu container - simple positioning below */
+    .css-26l3qy-menu {
+        background-color: #FFFFFF !important;
+        border: 1px solid #CCCCCC !important;
+        border-radius: 4px !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+    }
+    .css-1hwfws3-menu {
+        background-color: #FFFFFF !important;
+        border: 1px solid #CCCCCC !important;
+        border-radius: 4px !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+    }
+    /* Streamlit selectbox dropdown menu */
+    div[data-testid="stSelectbox"] div[data-baseweb="popover"] > div {
+        background-color: #FFFFFF !important;
+        border: 1px solid #CCCCCC !important;
+        border-radius: 4px !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+    }
+    /* Modern Streamlit dropdown menu */
+    .st-emotion-cache-1y0tads {
+        background-color: #FFFFFF !important;
+    }
+    /* Dropdown options container */
+    div[role="listbox"] {
+        background-color: #FFFFFF !important;
+    }
+    /* Individual dropdown options */
+    div[role="option"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    div[role="option"]:hover {
+        background-color: #F0F0F0 !important;
+        color: #000000 !important;
+    }
+    /* Force all menu lists below */
+    .css-26l3qy-menu-list {
+        background-color: #FFFFFF !important;
+    }
+    /* Additional dropdown menu styles */
+    div[data-testid="stSelectbox"] [role="combobox"] + div {
+        background-color: #FFFFFF !important;
+    }
+    /* Ensure all dropdown menus appear below */
+    [data-baseweb="menu"] {
+        background-color: #FFFFFF !important;
+    }
+    /* Force dropdown placement to bottom only */
+    div[data-baseweb="popover"][data-placement*="top"] {
+        display: none !important;
+    }
+    div[data-baseweb="popover"]:not([data-placement*="top"]) {
+        background-color: #FFFFFF !important;
+    }
+    /* Override Streamlit's auto-positioning to force bottom placement */
+    .stSelectbox div[data-baseweb="select"] {
+        position: relative !important;
+    }
+    /* Ensure dropdown always opens downward */
+    div[data-testid="stSelectbox"] div[data-baseweb="popover"] {
+        transform: translateY(0) !important;
+        top: 100% !important;
+        bottom: auto !important;
+        margin-top: 2px !important;
+    }
+    /* Alternative selector for newer Streamlit versions */
+    div[data-testid="stSelectbox"] > div > div > div[data-baseweb="popover"] {
+        transform: translateY(0) !important;
+        top: 100% !important;
+        bottom: auto !important;
+        margin-top: 2px !important;
+    }
+    /* Dropdown loading/disabled state */
+    .css-1s2u09g-control--is-disabled {
+        background-color: #FFFFFF !important;
+        color: #666666 !important;
+        opacity: 0.7 !important;
+    }
+    .css-1pahdxg-control--is-disabled {
+        background-color: #FFFFFF !important;
+        color: #666666 !important;
+        opacity: 0.7 !important;
+    }
+    .stSelectbox select:disabled {
+        background-color: #FFFFFF !important;
+        color: #666666 !important;
+    }
+    /* Dropdown placeholder when loading */
+    .css-1wa3eu0-placeholder {
+        background-color: #FFFFFF !important;
+        color: #666666 !important;
+    }
+    /* Dropdown with loading state */
+    .css-1hwfws3[aria-disabled="true"] {
+        background-color: #FFFFFF !important;
+        color: #666666 !important;
+    }
+    /* Streamlit selectbox disabled state */
+    .stSelectbox[data-disabled="true"] > div > div {
+        background-color: #FFFFFF !important;
+        color: #666666 !important;
+        opacity: 0.7 !important;
+    }
+    .stSelectbox > div > div[aria-disabled="true"] {
+        background-color: #FFFFFF !important;
+        color: #666666 !important;
+        opacity: 0.7 !important;
+    }
+    /* General disabled selectbox */
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+        background-color: #FFFFFF !important;
+    }
+    div[data-testid="stSelectbox"][aria-disabled="true"] div[data-baseweb="select"] > div {
+        background-color: #FFFFFF !important;
+        color: #666666 !important;
+        opacity: 0.7 !important;
+    }
+    /* Dropdown text color - BLACK */
+    .stSelectbox > div > div {
+        color: #000000 !important;
+    }
+    .css-1uccc91-singleValue {
+        color: #000000 !important;
+    }
+    .css-1wa3eu0-placeholder {
+        color: #000000 !important;
+    }
+    /* Dropdown input text */
+    div[data-testid="stSelectbox"] div[role="combobox"] {
+        color: #000000 !important;
+    }
+    div[data-testid="stSelectbox"] * {
+        color: #000000 !important;
+    }
+    /* Override any white text in dropdown */
+    .stSelectbox div,
+    .stSelectbox span,
+    .stSelectbox input {
+        color: #000000 !important;
+    }
+    /* React Select text components */
+    div[class*="css-"][class*="singleValue"] {
+        color: #000000 !important;
+    }
+    div[class*="css-"][class*="placeholder"] {
+        color: #000000 !important;
+    }
+    /* Force specific control text classes */
+    .css-1pahdxg-control,
+    .css-1s2u09g-control,
+    .css-1hwfws3,
+    .css-1wa3eu0,
+    .css-1uccc91 {
+        color: #000000 !important;
+    }
+    /* Universal dropdown text override */
+    [data-testid="stSelectbox"] [class*="css-"] {
+        color: #000000 !important;
+    }
+    /* DROPDOWN ALL STATES - Loading, Expanded, Focused */
+    /* Loading state */
+    .stSelectbox div[aria-busy="true"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    .css-1s2u09g-control--is-loading {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    .css-1pahdxg-control--is-loading {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* Expanded/Open state */
+    .css-1s2u09g-control--menu-is-open {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    .css-1pahdxg-control--menu-is-open {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* Focused state */
+    .css-1s2u09g-control--is-focused {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border-color: #2196F3 !important;
+        box-shadow: 0 0 0 1px #2196F3 !important;
+    }
+    .css-1pahdxg-control--is-focused {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border-color: #2196F3 !important;
+    }
+    /* Disabled state */
+    .css-1s2u09g-control--is-disabled {
+        background-color: #FFFFFF !important;
+        color: #CCCCCC !important;
+        opacity: 0.7 !important;
+    }
+    .css-1pahdxg-control--is-disabled {
+        background-color: #FFFFFF !important;
+        color: #CCCCCC !important;
+        opacity: 0.7 !important;
+    }
+    /* Loading indicator */
+    .css-1pahdxg .css-1wa3eu0-placeholder,
+    .css-1s2u09g .css-1wa3eu0-placeholder {
+        color: #000000 !important;
+    }
+    /* Dropdown value when selected */
+    .css-1pahdxg .css-1uccc91-singleValue,
+    .css-1s2u09g .css-1uccc91-singleValue {
+        color: #000000 !important;
+    }
+    /* All dropdown states universal override */
+    div[data-testid="stSelectbox"] div[class*="css-"][class*="control"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    div[data-testid="stSelectbox"] div[class*="css-"][class*="control"] * {
+        color: #000000 !important;
+    }
+    /* Override any state changes */
+    .stSelectbox [class*="control"]:hover,
+    .stSelectbox [class*="control"]:focus,
+    .stSelectbox [class*="control"]:active {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* DROPDOWN OPTIONS - When clicked and opened */
+    /* All dropdown options white background */
+    div[role="option"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    div[role="option"]:hover {
+        background-color: #F0F0F0 !important;
+        color: #000000 !important;
+    }
+    div[role="option"]:focus {
+        background-color: #E3F2FD !important;
+        color: #000000 !important;
+    }
+    /* Dropdown menu container */
+    .css-26l3qy-menu {
+        background-color: #FFFFFF !important;
+        border: 1px solid #CCCCCC !important;
+        border-radius: 4px !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+    }
+    .css-1hwfws3-menu {
+        background-color: #FFFFFF !important;
+        border: 1px solid #CCCCCC !important;
+        border-radius: 4px !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+    }
+    /* Menu list container */
+    .css-26l3qy-menu-list {
+        background-color: #FFFFFF !important;
+    }
+    /* Selected option */
+    .css-1n7v3ny-option--is-selected {
+        background-color: #2196F3 !important;
+        color: #FFFFFF !important;
+    }
+    /* Focused option */
+    .css-1n7v3ny-option--is-focused {
+        background-color: #E3F2FD !important;
+        color: #000000 !important;
+    }
+    /* Regular options */
+    .css-1n7v3ny-option {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    .css-1n7v3ny-option:hover {
+        background-color: #F0F0F0 !important;
+    }
+    /* Dropdown loading message */
+    .css-1wa3eu0-placeholder {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* "Loading..." or "No options" text */
+    div[data-testid="stSelectbox"] div[class*="css-"][class*="noOptionsMessage"],
+    div[data-testid="stSelectbox"] div[class*="css-"][class*="loadingMessage"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* UNIVERSAL DROPDOWN STATE OVERRIDE */
+    /* All selectbox states - comprehensive coverage */
+    .stSelectbox,
+    .stSelectbox *,
+    div[data-testid="stSelectbox"],
+    div[data-testid="stSelectbox"] * {
+        transition: none !important;
+    }
+    /* Dropdown container in all states */
+    div[data-testid="stSelectbox"] div[data-baseweb="select"],
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] *:not([role="option"]) {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* Dropdown when loading regions */
+    .stSelectbox div[aria-expanded="false"],
+    .stSelectbox div[aria-expanded="true"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* Streamlit specific loading and disabled states */
+    div[data-testid="stSelectbox"][data-disabled="true"],
+    div[data-testid="stSelectbox"][data-disabled="true"] * {
+        background-color: #FFFFFF !important;
+        color: #CCCCCC !important;
+    }
+    /* Override theme colors completely */
+    .stSelectbox > div > div[class*="css-"],
+    .stSelectbox > div > div[class*="css-"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* Number input styling */
+    .stNumberInput > div > div > input {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* Text input styling */
+    .stTextInput > div > div > input {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    /* Primary button styling - Generate Plan button */
+    .stButton > button[kind="primary"] {
+        background-color: #085A3E !important;
+        border: 1px solid #085A3E !important;
+        color: #FFFFFF !important;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background-color: #064229 !important;
+        border: 1px solid #064229 !important;
+        color: #FFFFFF !important;
+    }
+    .stButton > button[kind="primary"]:active {
+        background-color: #053822 !important;
+        border: 1px solid #053822 !important;
+        color: #FFFFFF !important;
+    }
+    /* Alternative primary button selectors */
+    button[data-testid="baseButton-primary"] {
+        background-color: #085A3E !important;
+        border: 1px solid #085A3E !important;
+        color: #FFFFFF !important;
+    }
+    button[data-testid="baseButton-primary"]:hover {
+        background-color: #064229 !important;
+        border: 1px solid #064229 !important;
+        color: #FFFFFF !important;
+    }
+    /* More specific text color for button content */
+    .stButton > button[kind="primary"] p,
+    .stButton > button[kind="primary"] span,
+    .stButton > button[kind="primary"] div {
+        color: #FFFFFF !important;
+    }
+    button[data-testid="baseButton-primary"] p,
+    button[data-testid="baseButton-primary"] span,
+    button[data-testid="baseButton-primary"] div {
+        color: #FFFFFF !important;
+    }
+    /* Streamlit primary button text override */
+    div[data-testid="stButton"] button[kind="primary"] {
+        color: #FFFFFF !important;
+    }
+    div[data-testid="stButton"] button[kind="primary"] * {
+        color: #FFFFFF !important;
+    }
+    /* Map container optimization - Force white background */
+    .streamlit-folium {
+        width: 100% !important;
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Map iframe styling - Remove black background */
+    iframe[title="streamlit_folium.st_folium"] {
+        width: 100% !important;
+        border-radius: 8px !important;
+        border: 1px solid #E0E0E0 !important;
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Map responsive sizing - Force white background */
+    .folium-map {
+        width: 100% !important;
+        height: 100% !important;
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Force map container backgrounds to white */
+    div[data-testid="stIFrame"] {
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Remove any black backgrounds from map containers */
+    .stApp iframe,
+    .stApp iframe body,
+    .stApp .leaflet-container {
+        background-color: #FFFFFF !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Force all map related elements to white background */
+    .leaflet-container,
+    .leaflet-tile-pane,
+    .leaflet-map-pane {
+        background-color: #FFFFFF !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Override any dark map themes */
+    .folium-map * {
+        background-color: transparent !important;
+    }
+    
+    /* Map wrapper div */
+    div[data-testid="stIFrame"] > div {
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Additional iframe background fixes */
+    iframe[title*="folium"] {
+        background-color: #FFFFFF !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Force streamlit map container background */
+    .streamlit-folium > div {
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Remove black from any map loading states */
+    .stSpinner,
+    .stSpinner > div {
+        background-color: transparent !important;
+    }
+    
+    /* CRITICAL: Fix black space below map */
+    /* Force iframe height to match content exactly */
+    iframe[title="streamlit_folium.st_folium"] {
+        height: 450px !important;
+        max-height: 450px !important;
+        min-height: 450px !important;
+        overflow: hidden !important;
+    }
+    
+    /* Remove any extra space below iframe */
+    div[data-testid="stIFrame"] {
+        height: auto !important;
+        max-height: 470px !important;
+        overflow: hidden !important;
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Force container to not expand beyond content */
+    .streamlit-folium {
+        height: auto !important;
+        max-height: 470px !important;
+        overflow: hidden !important;
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Remove margin/padding that might cause black space */
+    .stApp iframe[title="streamlit_folium.st_folium"] {
+        margin: 0 !important;
+        padding: 0 !important;
+        border: none !important;
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Target any black backgrounds specifically */
+    .stApp [style*="background: black"],
+    .stApp [style*="background-color: black"], 
+    .stApp [style*="background: #000"],
+    .stApp [style*="background-color: #000000"] {
+        background: #FFFFFF !important;
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Download button styling - GREEN THEME */
+    .stDownloadButton > button {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+        font-weight: 600 !important;
+        border-radius: 8px !important;
+    }
+    
+    .stDownloadButton > button:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+        border: 1px solid #064229 !important;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(8, 90, 62, 0.3) !important;
+    }
+    
+    .stDownloadButton > button:active {
+        background-color: #053822 !important;
+        border: 1px solid #053822 !important;
+    }
+    
+    /* Force download button text to be white */
+    .stDownloadButton > button * {
+        color: #FFFFFF !important;
+    }
+    
+    .stDownloadButton > button span {
+        color: #FFFFFF !important;
+    }
+    
+    .stDownloadButton > button div {
+        color: #FFFFFF !important;
+    }
+    
+    .stDownloadButton > button p {
+        color: #FFFFFF !important;
+    }
+    
+    /* Alternative download button selectors */
+    button[data-testid="baseButton-secondary"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+        font-weight: 600 !important;
+    }
+    
+    button[data-testid="baseButton-secondary"]:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+        border: 1px solid #064229 !important;
+    }
+    
+    button[data-testid="baseButton-secondary"] * {
+        color: #FFFFFF !important;
+    }
+    
+    /* Force all download-related buttons */
+    .stApp button[kind="secondary"] {
+        background-color: #085A3E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #085A3E !important;
+    }
+    
+    .stApp button[kind="secondary"]:hover {
+        background-color: #064229 !important;
+        color: #FFFFFF !important;
+    }
+    
+    .stApp button[kind="secondary"] * {
+        color: #FFFFFF !important;
+    }
+    
+    /* FORCE ALL DROPDOWNS TO BE WHITE - NUCLEAR OPTION */
+    /* Universal dropdown override */
+    * {
+        transition: none !important;
+    }
+    
+    /* Force all select elements */
+    select, select * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Force all dropdown menus */
+    [role="listbox"], [role="listbox"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    [role="menu"], [role="menu"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    [role="option"], [role="option"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Force all popover/overlay elements */
+    [data-baseweb="popover"], [data-baseweb="popover"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    [data-baseweb="menu"], [data-baseweb="menu"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Force all BaseWeb select components */
+    [data-baseweb="select"], [data-baseweb="select"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Override any CSS classes that might create dark dropdowns */
+    div[class*="select"], div[class*="dropdown"], div[class*="menu"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    div[class*="select"] *, div[class*="dropdown"] *, div[class*="menu"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Force any element with dark background in dropdown context */
+    .stApp [style*="background-color: rgb(38, 39, 48)"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    .stApp [style*="background: rgb(38, 39, 48)"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Additional aggressive dropdown targeting */
+    .stSelectbox, .stSelectbox *, 
+    [data-testid="stSelectbox"], [data-testid="stSelectbox"] *,
+    div[data-testid="stSelectbox"], div[data-testid="stSelectbox"] * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        background: #FFFFFF !important;
+    }
+    
+    /* Universal override for any dark themed elements */
+    [style*="background"] {
+        background-color: #FFFFFF !important;
+    }
+    
+    /* Force all CSS classes with dark colors */
+    [class*="css-"] {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Override any inherited styles */
+    .stApp * {
+        background-color: inherit !important;
+        color: #000000 !important;
+    }
+    
+    /* Specific override for dropdown containers */
+    .stApp .stSelectbox {
+        background-color: #FFFFFF !important;
+    }
+    
+    .stApp .stSelectbox * {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* FORCE DROPDOWN POSITIONING ON CONTAINER LEVEL */
+    /* Set selectbox container positioning */
+    .stSelectbox,
+    [data-testid="stSelectbox"] {
+        position: relative !important;
+        overflow: visible !important;
+    }
+    
+    /* Set dropdown wrapper positioning */
+    .stSelectbox > div,
+    [data-testid="stSelectbox"] > div {
+        position: relative !important;
+        overflow: visible !important;
+    }
+    
+    /* Set BaseWeb select container positioning */
+    [data-testid="stSelectbox"] div[data-baseweb="select"] {
+        position: relative !important;
+        overflow: visible !important;
+    }
+    
+    /* Force dropdown menu positioning below */
+    [data-testid="stSelectbox"] [data-baseweb="popover"] {
+        position: absolute !important;
+        top: calc(100% + 4px) !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 1000 !important;
+    }
+    
+    /* Hide upward facing dropdowns */
+    [data-testid="stSelectbox"] [data-baseweb="popover"][data-placement*="top"] {
+        display: none !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+   
+    
+    # Navigation header
+    st.markdown("<h1 style='text-align: center; color: #000000;'>Campaign Preparation</h1>", unsafe_allow_html=True)
+    
+    
+    
+    # Load countries
+    countries = get_countries()
+    if not countries:
+        st.error("❌ No countries available from API.")
+        st.stop()
+    
+    # Country Selection
+    st.subheader("🌍 Select Country")
+    country_options = ["-- Select Country --"] + [country['name'] for country in countries]
+    selected_country_option = st.selectbox("Choose a country:", country_options)
+    
+    # Region Selection
+    st.subheader("🏞️ Select Region")
+    
+    if selected_country_option != "-- Select Country --":
+        selected_country = next((c for c in countries if c['name'] == selected_country_option), None)
+        country_id = selected_country['id'] if selected_country else None
+        
+        boundary_data = get_boundary_data(country_id)
+        
+        if boundary_data and boundary_data.get("rows"):
+            regions = boundary_data["rows"]
+            
+            region_options = []
+            for i, region in enumerate(regions):
+                name = None
+                for field in ['NAME']:
+                    if region.get(field) and str(region.get(field)).strip():
+                        name = str(region.get(field)).strip()
+                        break
+                
+                if not name:
+                    name = f"Region {i+1}"
+                region_options.append(name)
+            
+            selected_region_name = st.selectbox("Choose a region:", ["-- Select Region --"] + region_options)
+            
+            # Check if valid region is selected
+            region_selected = selected_region_name != "-- Select Region --"
+            
+            # Initialize variables for parameters
+            all_selected_tags = []
+            top_percent = 0.5
+            precision = 6
+            chunk_size = 15
+            max_workers = 10
+            selected_region_data = None
+            
+            if region_selected:
+                selected_region_index = region_options.index(selected_region_name)
+                selected_region_data = regions[selected_region_index]
+                
+            # Optional Parameters Section - Since we calculate all geohash, parameters are optional
+            if region_selected:
+                st.subheader("⚙️ Optional Parameters")
+                st.info("ℹ️ Since we calculate all geohash areas, parameter selection is optional")
+                
+                # Advanced Options (collapsed by default)
+                with st.expander("🔧 Advanced Options", expanded=False):
+                        precision = st.selectbox(
+                            "Geohash Precision", 
+                            options=[5, 6, 7], 
+                            index=1,
+                            help="Higher precision = smaller areas, more detail"
+                        )
+                        
+                        chunk_size = st.number_input(
+                            "Processing Chunk Size",
+                            min_value=5,
+                            max_value=50,
+                            value=15,
+                            help="Number of geohash areas to process in each batch"
+                        )
+                        
+                        max_workers = st.number_input(
+                            "Max Workers",
+                            min_value=5,
+                            max_value=20,
+                            value=10,
+                            help="Number of parallel workers for processing"
+                        )
+                
+                # Set dummy tags for compatibility (not used anymore)
+                all_selected_tags = ['dummy']  # Just to pass validation
+            
+            # Parameters are always considered selected since we don't need tag filtering
+            parameters_selected = True
+        else:
+            st.selectbox("Choose a region:", ["-- No regions available --"], disabled=True)
+            st.warning("⚠️ No regions available for the selected country")
+            
+            # Set variables for consistency
+            region_selected = False
+            all_selected_tags = []
+            parameters_selected = False
+            generate_clicked = False
+    else:
+        st.selectbox("Choose a region:", ["-- Select Country first --"], disabled=True)
+        
+        # Set variables for consistency
+        region_selected = False
+        all_selected_tags = []
+        parameters_selected = False
+        generate_clicked = False
+            
+    
+    # Show button with appropriate state
+    # Check if currently processing
+    is_processing = st.session_state.get('is_processing', False)
+    
+    if is_processing:
+        st.button('🔄 Processing...', type='secondary', disabled=True, use_container_width=True)
+        generate_clicked = False
+    elif not parameters_selected:
+        st.button('Generate Plan', type='primary', disabled=True, use_container_width=True)
+      
+        generate_clicked = False
+    elif not region_selected:
+        st.button('Generate Plan', type='primary', disabled=True, use_container_width=True)
+       
+        generate_clicked = False
+    else:
+        generate_clicked = st.button('Generate Plan', type='primary', use_container_width=True)
+    # Process workflow if button clicked and region selected
+    if (generate_clicked and region_selected and parameters_selected and 
+        'selected_country' in locals() and 'selected_region_name' in locals() and 
+        'selected_region_data' in locals()):
+        
+                st.session_state.is_processing = True
+                
+                # Clear previous results and store new selection info
+                st.session_state.workflow_result = None
+                st.session_state.budget_result = None  # Clear budget too
+                st.session_state.selected_country_info = selected_country
+                st.session_state.selected_region_info = {
+                    'name': selected_region_name,
+                    'data': selected_region_data
+                }
+                
+                with st.spinner("🔄 Processing - this may take a few minutes..."):
+                    result = process_complete_geohash_workflow(
+                        country_id=country_id,
+                        region_data=selected_region_data,
+                        tag_filters=None,  # Not used anymore
+                        top_percent=0.5,  # Not used anymore
+                        precision=precision,
+                        chunk_size=chunk_size,
+                        max_workers=max_workers,
+                        use_cache=False
+                    )
+                
+                # Clear processing state
+                st.session_state.is_processing = False
+                
+                # Store result in session state
+                st.session_state.workflow_result = result
+                
+                if result['success']:
+                    st.success("✅ **Plan generation completed successfully!**")
+                    st.info("📊 Results will be displayed below...")
+                    st.balloons()  # Celebration animation
+                    st.rerun()  # Refresh to show results
+                else:
+                    st.error("❌ **Plan generation failed!**")
+                    st.write("**Error Details:**")
+                    for error in result['errors']:
+                        st.error(f"• {error}")
+                    st.info("💡 Please try again or contact support if the problem persists.")
+
+    # Display results and download buttons if workflow has been completed
+    # This section is outside all the selection logic to ensure it always runs
+    if (hasattr(st.session_state, 'workflow_result') and 
+        st.session_state.workflow_result and 
+        st.session_state.workflow_result.get('success', False) and
+        hasattr(st.session_state, 'selected_country_info') and
+        hasattr(st.session_state, 'selected_region_info') and
+        st.session_state.selected_country_info and
+        st.session_state.selected_region_info):
+        
+        result = st.session_state.workflow_result
+        selected_country = st.session_state.selected_country_info
+        selected_region = st.session_state.selected_region_info
+        
+        st.markdown("---")
+        
+        # 1. Map Preview After Processing
+        st.subheader("🗺️ Results Map Preview")
+        
+        # Create map with all available data
+        try:
+            # Get boundary data for map (if available from step1)
+            boundary_geojson = None
+            if result['step1_geohash'] and result['step1_geohash'].get('geohashes_geojson'):
+                # Use original boundary if available, otherwise use generated geohash as boundary reference
+                boundary_geojson = result['step1_geohash']['geohashes_geojson']
+            
+            # Get dense geohash data
+            dense_geohash_gdf = result['step2_dense_geohash']
+            
+            # Get roads data
+            roads_geojson = result['step3_ukm_result'].get('roads_geojson')
+            
+            # Create and display map
+            map_obj = create_workflow_map(
+                boundary_geojson=boundary_geojson,
+                dense_geohash_gdf=dense_geohash_gdf,
+                roads_geojson=roads_geojson
+            )
+            
+            # Display map with white background - NO BLACK SPACE
+            st.markdown("""
+                <div style="background-color: #FFFFFF !important; 
+                           padding: 15px; 
+                           margin: 10px 0;
+                           border-radius: 8px; 
+                           border: 1px solid #E0E0E0;
+                           overflow: hidden;
+                           height: auto;">
+            """, unsafe_allow_html=True)
+            
+            map_data = st_folium(
+                map_obj, 
+                width=None, 
+                height=450,  # Fixed height to prevent black space
+                returned_objects=["last_clicked"],
+                key="workflow_map"
+            )
+            
+            st.markdown("</div>", unsafe_allow_html=True)
+            
+            # Show clicked feature info if available
+            if map_data['last_clicked'] and map_data['last_clicked'].get('lat'):
+                clicked_lat = map_data['last_clicked']['lat']
+                clicked_lng = map_data['last_clicked']['lng']
+                st.info(f"📍 Clicked Location: {clicked_lat:.6f}, {clicked_lng:.6f}")
+                    
+        except Exception as e:
+            st.error(f"❌ Error creating map preview: {str(e)}")
+            st.info("🗺️ Map preview unavailable, but you can still download the data files.")
+        
+        # 2. Forecast Budget Section - minimal spacing
+        st.markdown("<br>", unsafe_allow_html=True)  # Small spacing instead of full markdown divider
+        st.subheader("💱 Forecast Budget Calculator")
+        
+        try:
+            # Get target km from workflow result
+            target_km = result['step3_ukm_result']['total_road_length_km']
+            
+            # Load countries pricing data
+            countries_pricing = get_countries_pricing()
+            
+            if countries_pricing:
+                # Create country lookup
+                country_dict = {country['name']: country for country in countries_pricing}
+                country_names = list(country_dict.keys())
+                
+                # Create two columns for better layout
+                col1, col2 = st.columns([1, 1])
+                
+                with col1:   
+                    # Display auto-filled target km from workflow result
+                    st.metric("📏 UKM Target", f"{target_km:.2f} km")
+                    
+                    # Country selection
+                    selected_budget_country = st.selectbox(
+                        "🌍 Country for Pricing:",
+                        options=country_names,
+                        index=0 if country_names else None,
+                        key="budget_country_selector"
+                    )
+                    
+                    # DAX number input
+                    dax_number = st.number_input(
+                        "👷 DAX Count:", 
+                        min_value=1, 
+                        value=1,
+                        step=1,
+                        help="Number of DAX (drivers)"
+                        )
+                    
+                with col2:
+                    # Get default values from selected country and show parameter inputs
+                    if selected_budget_country:
+                        country_data = country_dict[selected_budget_country]
+                        # Add validation and fallback values to prevent None errors with country-specific defaults
+                        country_name = country_data.get('name', '').lower()
+                        
+                        # Indonesia-specific defaults
+                        if 'indonesia' in country_name:
+                            fallback_ukm = 8000.0
+                            fallback_insurance = 132200.0
+                            fallback_dataplan = 400000.0
+                            fallback_currency = 'IDR'
+                            fallback_symbol = 'Rp'
+                        else:
+                            # Generic defaults for other countries
+                            fallback_ukm = 0.25
+                            fallback_insurance = 8.5
+                            fallback_dataplan = 30.0
+                            fallback_currency = 'USD'
+                            fallback_symbol = '$'
+                        
+                        default_ukm_price = country_data.get('ukm_price', fallback_ukm) or fallback_ukm
+                        default_insurance = country_data.get('insurance', fallback_insurance) or fallback_insurance
+                        default_dataplan = country_data.get('dataplan', fallback_dataplan) or fallback_dataplan
+                        currency = country_data.get('currency', fallback_currency) or fallback_currency
+                        currency_symbol = country_data.get('currency_symbol', fallback_symbol) or fallback_symbol
+                        
+                        # UKM Price input - user input custom value
+                        ukm_price_input = st.number_input(
+                            f"🛣️ UKM Price per KM ({currency}):",
+                            min_value=0.0,
+                            value=default_ukm_price,
+                            step=0.01,
+                            help=f"Default: {format_currency(default_ukm_price, currency, currency_symbol)} per KM",
+                            key="predefined_ukm_price"
+                        )
+                        
+                        # Insurance input
+                        insurance_input = st.number_input(
+                            f"🛡️ Insurance/DAX/Month ({currency}):",
+                            min_value=0.0,
+                            value=default_insurance,
+                            step=0.01,
+                            help=f"Default: {format_currency(default_insurance, currency, currency_symbol)}",
+                            key="predefined_insurance"
+                        )
+                        
+                        # Dataplan input
+                        dataplan_input = st.number_input(
+                            f"📱 Dataplan/DAX/Month ({currency}):",
+                            min_value=0.0,
+                            value=default_dataplan,
+                            step=0.01,
+                            help=f"Default: {format_currency(default_dataplan, currency, currency_symbol)}",
+                            key="predefined_dataplan"
+                        )
+                    else:
+                        st.info("ℹ️ Select a country to see pricing parameters")
+                    
+                # Calculate Budget Button (outside columns, full width)
+            budget_ready = target_km > 0 and dax_number > 0 and selected_budget_country
+                    
+            if budget_ready:
+                        calculate_budget = st.button(
+                            "💰 Calculate Budget", 
+                            type="primary",
+                            use_container_width=True,
+                            key="calculate_budget_btn"
+                        )
+            else:
+                        st.button(
+                            "💰 Calculate Budget", 
+                            type="primary",
+                            disabled=True,
+                            use_container_width=True,
+                            key="calculate_budget_btn_disabled"
+                        )
+                        calculate_budget = False
+                
+                # Show validation warnings outside the country selection
+            if target_km <= 0:
+                        st.warning("⚠️ Target KM must be > 0")
+            if dax_number <= 0:
+                        st.warning("⚠️ DAX count must be > 0") 
+            if not selected_budget_country:
+                        st.warning("⚠️ Select a country")
+                
+                        # Handle budget calculation
+            if selected_budget_country and calculate_budget:
+                    try:
+                        # Get country data and input values
+                        country_data = country_dict[selected_budget_country]
+                        currency = country_data.get('currency', 'USD') or 'USD'
+                        currency_symbol = country_data.get('currency_symbol', '$') or '$'
+                        
+                        # Get current values from session state or use defaults
+                        # This ensures we have the values even if they were set in the columns
+                        country_name = country_data.get('name', '').lower()
+                        
+                        # Indonesia-specific defaults
+                        if 'indonesia' in country_name:
+                            fallback_ukm = 8000.0
+                            fallback_insurance = 132200.0
+                            fallback_dataplan = 400000.0
+                        else:
+                            # Generic defaults for other countries
+                            fallback_ukm = 0.25
+                            fallback_insurance = 8.5
+                            fallback_dataplan = 30.0
+                        
+                        default_ukm_price = country_data.get('ukm_price', fallback_ukm) or fallback_ukm
+                        default_insurance = country_data.get('insurance', fallback_insurance) or fallback_insurance
+                        default_dataplan = country_data.get('dataplan', fallback_dataplan) or fallback_dataplan
+                        
+                        # Prepare custom parameters with user inputs
+                        custom_params = {
+                            'ukm_price': st.session_state.get('predefined_ukm_price', default_ukm_price),
+                            'insurance_rate': st.session_state.get('predefined_insurance', default_insurance),
+                            'dataplan_rate': st.session_state.get('predefined_dataplan', default_dataplan),
+                            'currency': currency,
+                            'currency_symbol': currency_symbol,
+                            'exchange_rate_to_usd': country_data.get('exchange_rate_to_usd', 1.0) or 1.0,
+                            'country_name': selected_budget_country,
+                            'custom_basic_incentive': None  # Let it auto-calculate from target_km * ukm_price
+                        }
+                        
+                        # Calculate forecast budget using custom function to handle user inputs
+                        budget_result = forecast_budget_custom(target_km, dax_number, custom_params)
+                        
+                        # Add calculation parameters to result
+                        budget_result['target_km_input'] = target_km
+                        budget_result['dax_number_input'] = dax_number
+                        budget_result['calculation_mode'] = 'predefined_with_custom'
+                        
+                        # Store in session state
+                        st.session_state.budget_result = budget_result
+                        
+                        st.success("✅ Budget Calculated!")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+                            
+            else:
+                st.error("❌ Unable to load predefined pricing data")
+                
+        except Exception as e:
+            st.error(f"❌ Error loading budget calculator: {str(e)}")
+        
+        # Display budget result if available
+        if (hasattr(st.session_state, 'budget_result') and 
+            st.session_state.budget_result):
+            
+            budget_result = st.session_state.budget_result
+            
+            # Display country and currency info
+            currency = budget_result['Currency']
+            symbol = budget_result['Symbol']
+            
+            # Create budget breakdown table
+            breakdown_data = {
+                "Budget Component": [
+                    "Estimated Collection Period",
+                    "Basic Incentive", 
+                    ">95% Bonus Coverage",
+                    "Insurance",
+                    "Data Plan",
+                    "Miscellaneous (5%)",
+                    "TOTAL BUDGET"
+                ],
+                "Amount": [
+                    f"{budget_result['Month Estimation']} months",
+                    format_currency(budget_result['Basic Incentive'], currency, symbol),
+                    format_currency(budget_result['>95% Bonus Coverage'], currency, symbol),
+                    format_currency(budget_result['Insurance'], currency, symbol),
+                    format_currency(budget_result['Dataplan'], currency, symbol),
+                    format_currency(budget_result['Miscellaneous (5%)'], currency, symbol),
+                    f"{format_currency(budget_result['Total Forecast Budget'], currency, symbol)}"
+                ]
+            }
+            
+            # Display as table with borders
+            breakdown_df = pd.DataFrame(breakdown_data)
+            
+            # Add CSS styling for table borders
+            st.markdown("""
+            <style>
+            .budget-table table {
+                border-collapse: collapse;
+                width: 100%;
+                margin: 0 auto;
+            }
+            .budget-table th, .budget-table td {
+                border: 1px solid #ddd;
+                padding: 12px;
+                text-align: left;
+            }
+            .budget-table th {
+                background-color: #f8f9fa;
+                font-weight: bold;
+            }
+            .budget-table tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+            .budget-table tr:hover {
+                background-color: #f5f5f5;
+            }
+            .budget-table tr:last-child {
+                font-weight: bold;
+                background-color: #e8f5e8;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # Convert DataFrame to HTML with custom styling
+            table_html = breakdown_df.to_html(index=False, escape=False, classes='budget-table')
+            st.markdown(f'<div class="budget-table">{table_html}</div>', unsafe_allow_html=True)
+            
+            # Display USD equivalent
+            total_usd = f"${budget_result['Total Forecast Budget (USD)']:,.2f}"
+            st.info(f"💱 **USD Equivalent:** {total_usd}")
+            
+           
+        # Download options - closer spacing
+        st.markdown("<br>", unsafe_allow_html=True)  # Small spacing instead of full divider
+        st.subheader("📥 Download Results")
+        
+        download_col1, download_col2, download_col3 = st.columns(3)
+        
+        with download_col1:
+            # Download original geohash
+            geohash_str = json.dumps(result['step1_geohash']["geohashes_geojson"], indent=2)
+            filename_prefix = f"{selected_country['name'].lower().replace(' ', '_')}_{selected_region['name'].lower().replace(' ', '_')}"
+            
+            st.download_button(
+                "📄 Download Geohash Grid",
+                geohash_str,
+                f"{filename_prefix}_geohash_grid.geojson",
+                "application/geo+json",
+                key="download_geohash_grid"
+            )
+        
+        with download_col2:
+            # Download dense geohash
+            buffer = BytesIO()
+            result['step2_dense_geohash'].to_file(buffer, driver="GeoJSON")
+            buffer.seek(0)
+            st.download_button(
+                "🧭 Download All Geohash",
+                buffer.getvalue(),
+                f"{filename_prefix}_all_geohash_processed.geojson",
+                "application/geo+json",
+                key="download_all_geohash_processed"
+            )
+        
+        with download_col3:
+            # Download roads
+            if result['step3_ukm_result'].get('roads_geojson'):
+                roads_str = json.dumps(result['step3_ukm_result']['roads_geojson'], indent=2)
+                st.download_button(
+                    "🛣️ Download Roads Plan",
+                    roads_str,
+                    f"{filename_prefix}_roads.geojson",
+                    "application/geo+json",
+                    key="download_roads"
+                )
+        
+        # Clear results button
+        st.markdown("<br>", unsafe_allow_html=True)  # Small spacing
+        if st.button("🗑️ Clear All Results", help="Clear workflow and budget results to start over"):
+            if hasattr(st.session_state, 'workflow_result'):
+                st.session_state.workflow_result = None
+            if hasattr(st.session_state, 'selected_country_info'):
+                st.session_state.selected_country_info = None
+            if hasattr(st.session_state, 'selected_region_info'):
+                st.session_state.selected_region_info = None
+            if hasattr(st.session_state, 'budget_result'):
+                st.session_state.budget_result = None
+            if hasattr(st.session_state, 'is_processing'):
+                st.session_state.is_processing = False
+            st.success("✅ All results cleared!")
+            st.rerun()
+    
+    # If no results but there's a failed workflow, show error info
+    elif (hasattr(st.session_state, 'workflow_result') and 
+          st.session_state.workflow_result and 
+          not st.session_state.workflow_result.get('success', False)):
+        st.error("❌ Last workflow execution failed!")
+        st.write("**Errors:**")
+        for error in st.session_state.workflow_result.get('errors', []):
+            st.error(f"• {error}")
+   
+    # Footer
+    st.markdown(
+        """
+        <hr style="margin-top: 2rem; margin-bottom: 1rem;">
+        <div style='text-align: center; color: grey; font-size: 0.9rem;'>
+            © 2025 ID Karta IoT Team
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+if __name__ == "__main__":
+    streamlit_complete_workflow_ui()

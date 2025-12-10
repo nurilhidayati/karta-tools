@@ -1,0 +1,34 @@
+timestamp,device_id,vehicle_id,issue_type,severity,region,vehicle_type
+2025-09-25T11:20:00,KDC-1492,VH-5492,overheat,high,Jakarta,LCV
+2025-09-25T10:35:00,KDC-1088,VH-5088,camera_outward_no_signal,medium,Jakarta,Motorcycle
+2025-09-25T10:35:00,KDC-1143,VH-5143,dashcam_error,medium,Jakarta,Passenger Car
+2025-09-25T10:22:00,KDC-1183,VH-5183,dashcam_error,medium,Bekasi,Truck
+2025-09-25T10:15:00,KDC-1026,VH-5026,camera_inward_no_signal,medium,Jakarta,Motorcycle
+2025-09-25T10:14:00,KDC-1247,VH-5247,camera_outward_no_signal,medium,Jakarta,Motorcycle
+2025-09-25T09:52:00,KDC-1250,VH-5250,hardware_fault,high,Jakarta,Passenger Car
+2025-09-25T09:46:00,KDC-1387,VH-5387,low_voltage,high,Jakarta,Passenger Car
+2025-09-25T09:40:00,KDC-1386,VH-5386,dashcam_error,medium,Jakarta,LCV
+2025-09-25T08:50:00,KDC-1442,VH-5442,dashcam_error,medium,Jakarta,Truck
+2025-09-25T08:37:00,KDC-1494,VH-5494,camera_inward_no_signal,medium,Depok,Passenger Car
+2025-09-25T08:34:00,KDC-1146,VH-5146,camera_outward_no_signal,medium,Jakarta,Truck
+2025-09-25T08:22:00,KDC-1291,VH-5291,overheat,high,Bogor,LCV
+2025-09-25T08:14:00,KDC-1519,VH-5519,low_voltage,high,Jakarta,Passenger Car
+2025-09-25T08:11:00,KDC-1364,VH-5364,hardware_fault,high,Bekasi,Passenger Car
+2025-09-25T06:57:00,KDC-1243,VH-5243,dashcam_error,medium,Jakarta,LCV
+2025-09-25T06:15:00,KDC-1204,VH-5204,low_voltage,high,Bogor,Passenger Car
+2025-09-25T06:02:00,KDC-1201,VH-5201,camera_outward_no_signal,medium,Jakarta,Motorcycle
+2025-09-25T05:45:00,KDC-1453,VH-5453,camera_inward_no_signal,medium,Jakarta,Passenger Car
+2025-09-25T05:37:00,KDC-1305,VH-5305,camera_inward_no_signal,medium,Bogor,LCV
+2025-09-25T05:27:00,KDC-1285,VH-5285,camera_outward_no_signal,medium,Jakarta,Passenger Car
+2025-09-25T05:25:00,KDC-1113,VH-5113,camera_outward_no_signal,medium,Jakarta,Passenger Car
+2025-09-25T05:01:00,KDC-1060,VH-5060,camera_inward_no_signal,medium,Tangerang,LCV
+2025-09-25T04:48:00,KDC-1336,VH-5336,camera_inward_no_signal,medium,Jakarta,Passenger Car
+2025-09-25T04:42:00,KDC-1123,VH-5123,low_voltage,high,Jakarta,LCV
+2025-09-25T04:24:00,KDC-1044,VH-5044,low_voltage,high,Jakarta,Passenger Car
+2025-09-25T04:22:00,KDC-1041,VH-5041,camera_outward_no_signal,medium,Jakarta,Passenger Car
+2025-09-25T04:15:00,KDC-1020,VH-5020,camera_inward_no_signal,medium,Bekasi,LCV
+2025-09-25T04:05:00,KDC-1094,VH-5094,overheat,high,Tangerang,Passenger Car
+2025-09-25T03:22:00,KDC-1445,VH-5445,dashcam_error,medium,Jakarta,Passenger Car
+2025-09-25T03:04:00,KDC-1144,VH-5144,hardware_fault,high,Depok,Motorcycle
+2025-09-25T02:36:00,KDC-1174,VH-5174,camera_inward_no_signal,medium,Bekasi,LCV
+2025-09-25T02:12:00,KDC-1480,VH-5480,dashcam_error,medium,Jakarta,Motorcycle
