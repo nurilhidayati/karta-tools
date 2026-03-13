@@ -3,11 +3,19 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import Geocoder, MarkerCluster, Draw
 
-import geopandas as gpd
 import pandas as pd
 import re, json, io, zipfile
 import geohash2
 from shapely.geometry import box
+
+from geo_helpers import (
+    features_to_gdf,
+    ensure_polygons,
+    geohashes_to_geometry,
+    df_to_geojson,
+    geohash_cells_to_csv,
+    geohash_cells_to_geojson_dict,
+)
 
 st.set_page_config(page_title="Draw → Geohash (Overlay in One Map)", layout="wide")
 
@@ -27,7 +35,7 @@ def make_zip_bytes(inner_filename: str, inner_bytes: bytes) -> bytes:
     buf.seek(0)
     return buf.read()
 
-def create_geohash_list(gdf: gpd.GeoDataFrame, precision: int, inner: bool = False) -> pd.DataFrame:
+def create_geohash_list(gdf: pd.DataFrame, precision: int, inner: bool = False) -> pd.DataFrame:
     """Convert polygon geometries to geohash list using geohash2 (no polygeohasher)."""
     def _geom_to_geohashes(geom):
         if geom is None or geom.is_empty:
@@ -63,56 +71,8 @@ def create_geohash_list(gdf: gpd.GeoDataFrame, precision: int, inner: bool = Fal
             return list(unique_gh)
         except Exception:
             return []
-    geohash_lists = gdf.geometry.apply(_geom_to_geohashes)
+    geohash_lists = gdf["geometry"].apply(_geom_to_geohashes)
     return pd.DataFrame({"geohash_list": geohash_lists})
-
-def geohashes_to_geometry(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
-    """Convert geohash strings to polygon geometries using geohash2."""
-    def _gh_to_polygon(gh: str):
-        try:
-            lat, lon, lat_err, lon_err = geohash2.decode_exactly(gh)
-            return box(lon - lon_err, lat - lat_err, lon + lon_err, lat + lat_err)
-        except Exception:
-            return None
-    geometries = df[column_name].astype(str).apply(_gh_to_polygon)
-    valid = geometries.notna()
-    out = df[valid].copy().reset_index(drop=True)
-    out["geometry"] = geometries[valid].values
-    return out
-
-def geohash_cells_to_csv(cells_gdf: gpd.GeoDataFrame) -> str:
-    """Convert geohash GeoDataFrame to CSV format (geohash, lat, lon) seperti 3_Tools_Add_On."""
-    if cells_gdf is None or cells_gdf.empty:
-        return ""
-    rows = []
-    for _, row in cells_gdf.iterrows():
-        cent = row.geometry.centroid
-        rows.append({
-            "geohash": row.get("geohash", ""),
-            "lat": round(cent.y, 6),
-            "lon": round(cent.x, 6)
-        })
-    return pd.DataFrame(rows).to_csv(index=False)
-
-def geohash_cells_to_geojson_dict(cells_gdf: gpd.GeoDataFrame) -> dict:
-    """Convert geohash GeoDataFrame to GeoJSON dict (compatibel dengan 3_Tools_Add_On format)."""
-    if cells_gdf is None or cells_gdf.empty:
-        return {"type": "FeatureCollection", "features": []}
-    features = []
-    for _, row in cells_gdf.iterrows():
-        cent = row.geometry.centroid
-        feat = {
-            "type": "Feature",
-            "properties": {
-                "geoHash": str(row.get("geohash", "")),
-                "center_lat": round(cent.y, 6),
-                "center_lon": round(cent.x, 6),
-                "precision": int(row.get("precision", len(str(row.get("geohash", "")))))
-            },
-            "geometry": json.loads(gpd.GeoSeries([row.geometry]).to_json())["features"][0]["geometry"]
-        }
-        features.append(feat)
-    return {"type": "FeatureCollection", "features": features}
 
 PRECISION_COLORS = {
     1:"#1f77b4", 2:"#ff7f0e", 3:"#2ca02c", 4:"#d62728",
@@ -193,17 +153,9 @@ for tile in ['OpenStreetMap']:
 # ------ Jika ada gambar tersimpan, hitung cells & overlay di MAP YANG SAMA ------
 cells_gdf = None
 if st.session_state["features_fc"]["features"]:
-    # Build GeoDataFrame dari gambar tersimpan
-    gdf = gpd.GeoDataFrame.from_features(st.session_state["features_fc"], crs="EPSG:4326")
-
-    # Pastikan polygon: LineString/Point → buffer kecil (5 m)
-    non_poly = ~gdf.geom_type.isin(["Polygon", "MultiPolygon"])
-    if non_poly.any():
-        gdf_poly = gdf.to_crs(3857)
-        gdf_poly.loc[non_poly, "geometry"] = gdf_poly.loc[non_poly, "geometry"].buffer(5)  # 5 meter
-        gdf_poly = gdf_poly.to_crs(4326)
-    else:
-        gdf_poly = gdf
+    # Build DataFrame dari gambar tersimpan (tanpa geopandas)
+    gdf = features_to_gdf(st.session_state["features_fc"])
+    gdf_poly = ensure_polygons(gdf)
 
     # Generate geohash list dari gambar tersimpan
     try:
@@ -222,7 +174,6 @@ if st.session_state["features_fc"]["features"]:
     if not flat.empty:
         try:
             cells_gdf = geohashes_to_geometry(pd.DataFrame({"geohash": flat}), "geohash")
-            cells_gdf = gpd.GeoDataFrame(cells_gdf, geometry=cells_gdf["geometry"], crs="EPSG:4326")
             cells_gdf["precision"] = cells_gdf["geohash"].astype(str).str.len()
         except Exception as e:
             st.error(f"Gagal membuat GeoJSON polygon sel geohash: {e}")
@@ -262,7 +213,7 @@ if st.session_state["features_fc"]["features"]:
 
             # Overlay cells di MAP YANG SAMA
             folium.GeoJson(
-                data=cells_preview.to_json(),
+                data=df_to_geojson(cells_preview),
                 name="Geohash Cells",
                 tooltip=folium.GeoJsonTooltip(fields=tooltip_fields),
                 style_function=style_fn,
@@ -276,7 +227,7 @@ if st.session_state["features_fc"]["features"]:
             if show_centroids:
                 mc = MarkerCluster(name="Geohash Centroids")
                 for _, row in cells_preview.iterrows():
-                    c = row.geometry.centroid
+                    c = row["geometry"].centroid
                     folium.Marker(
                         location=[c.y, c.x],
                         tooltip=f"geohash: {row['geohash']} | precision: {row['precision']}",
@@ -324,12 +275,8 @@ if fc_new["features"]:
 st.subheader("Download Data")
 if st.session_state["features_fc"]["features"]:
     # Hitung ulang daftar geohash dari gambar tersimpan (konsisten dengan overlay)
-    gdf_saved = gpd.GeoDataFrame.from_features(st.session_state["features_fc"], crs="EPSG:4326")
-    non_poly = ~gdf_saved.geom_type.isin(["Polygon", "MultiPolygon"])
-    if non_poly.any():
-        gdf_saved = gdf_saved.to_crs(3857)
-        gdf_saved.loc[non_poly, "geometry"] = gdf_saved.loc[non_poly, "geometry"].buffer(5)
-        gdf_saved = gdf_saved.to_crs(4326)
+    gdf_saved = features_to_gdf(st.session_state["features_fc"])
+    gdf_saved = ensure_polygons(gdf_saved)
 
     try:
         gh_df2 = create_geohash_list(gdf_saved, precision, inner=inner_cover)
@@ -347,9 +294,7 @@ if st.session_state["features_fc"]["features"]:
     joined_comma = ",".join(flat2.tolist())
 
     # Build cells_all untuk export GeoJSON & CSV (format seperti 3_Tools_Add_On)
-
     cells_all = geohashes_to_geometry(pd.DataFrame({"geohash": flat2}), "geohash")
-    cells_all = gpd.GeoDataFrame(cells_all, geometry=cells_all["geometry"], crs="EPSG:4326")
     cells_all["precision"] = cells_all["geohash"].astype(str).str.len()
 
     col_geo, col_csv = st.columns(2)

@@ -3,7 +3,14 @@ import streamlit as st
 import pandas as pd
 import geohash2
 from shapely.geometry import Polygon, box, shape
-import geopandas as gpd
+
+try:
+    import geopandas as gpd
+    HAS_GEOPANDAS = True
+except ImportError:
+    gpd = None
+    HAS_GEOPANDAS = False
+
 from io import StringIO
 import tempfile
 import zipfile
@@ -13,6 +20,9 @@ import requests
 import folium
 from streamlit_folium import st_folium
 
+if not HAS_GEOPANDAS:
+    st.warning("⚠️ Boundary upload (KML/KMZ) requires geopandas. Use **Draw Polygons** or **Copy Coordinates** instead.")
+    st.stop()
 
 # Convert geohash to polygon
 def geohash_to_polygon(gh):

@@ -8,11 +8,17 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import Geocoder
 
-import geopandas as gpd
 import pandas as pd
-import re, json, io, zipfile
+import re, json
 import geohash2
-from shapely.geometry import box, Polygon
+from shapely.geometry import Polygon
+
+from geo_helpers import (
+    df_to_geojson,
+    geohashes_to_geometry,
+    geohash_cells_to_csv,
+    geohash_cells_to_geojson_dict,
+)
 
 st.set_page_config(page_title="Copy Coordinates → Geohash", layout="wide")
 
@@ -52,13 +58,14 @@ def parse_coordinates_to_polygon(text: str) -> tuple:
         poly = Polygon(coords)
         if not poly.is_valid:
             poly = poly.buffer(0)
-        gdf = gpd.GeoDataFrame({"name": ["polygon"]}, geometry=[poly], crs="EPSG:4326")
+        gdf = pd.DataFrame({"name": ["polygon"], "geometry": [poly]})
         return gdf, None
     except Exception as e:
         return None, str(e)
 
-def create_geohash_list(gdf: gpd.GeoDataFrame, precision: int, inner: bool = False) -> pd.DataFrame:
+def create_geohash_list(gdf: pd.DataFrame, precision: int, inner: bool = False) -> pd.DataFrame:
     """Convert polygon geometries to geohash list using geohash2."""
+    from shapely.geometry import box
     def _geom_to_geohashes(geom):
         if geom is None or geom.is_empty:
             return []
@@ -92,50 +99,8 @@ def create_geohash_list(gdf: gpd.GeoDataFrame, precision: int, inner: bool = Fal
             return list(unique_gh)
         except Exception:
             return []
-    geohash_lists = gdf.geometry.apply(_geom_to_geohashes)
+    geohash_lists = gdf["geometry"].apply(_geom_to_geohashes)
     return pd.DataFrame({"geohash_list": geohash_lists})
-
-def geohashes_to_geometry(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
-    """Convert geohash strings to polygon geometries using geohash2."""
-    def _gh_to_polygon(gh: str):
-        try:
-            lat, lon, lat_err, lon_err = geohash2.decode_exactly(gh)
-            return box(lon - lon_err, lat - lat_err, lon + lon_err, lat + lat_err)
-        except Exception:
-            return None
-    geometries = df[column_name].astype(str).apply(_gh_to_polygon)
-    valid = geometries.notna()
-    out = df[valid].copy().reset_index(drop=True)
-    out["geometry"] = geometries[valid].values
-    return out
-
-def geohash_cells_to_csv(cells_gdf: gpd.GeoDataFrame) -> str:
-    if cells_gdf is None or cells_gdf.empty:
-        return ""
-    rows = []
-    for _, row in cells_gdf.iterrows():
-        cent = row.geometry.centroid
-        rows.append({"geohash": row.get("geohash", ""), "lat": round(cent.y, 6), "lon": round(cent.x, 6)})
-    return pd.DataFrame(rows).to_csv(index=False)
-
-def geohash_cells_to_geojson_dict(cells_gdf: gpd.GeoDataFrame) -> dict:
-    if cells_gdf is None or cells_gdf.empty:
-        return {"type": "FeatureCollection", "features": []}
-    features = []
-    for _, row in cells_gdf.iterrows():
-        cent = row.geometry.centroid
-        feat = {
-            "type": "Feature",
-            "properties": {
-                "geoHash": str(row.get("geohash", "")),
-                "center_lat": round(cent.y, 6),
-                "center_lon": round(cent.x, 6),
-                "precision": int(row.get("precision", len(str(row.get("geohash", "")))))
-            },
-            "geometry": json.loads(gpd.GeoSeries([row.geometry]).to_json())["features"][0]["geometry"]
-        }
-        features.append(feat)
-    return {"type": "FeatureCollection", "features": features}
 
 def normalize_and_validate_series(s: pd.Series) -> pd.Series:
     s = s.astype(str).str.strip().str.lower()
@@ -235,7 +200,6 @@ if gdf_to_use is not None and st.session_state.geohash_converted:
         flat = normalize_and_validate_series(pd.Series(flat)).drop_duplicates().reset_index(drop=True)
         if not flat.empty:
             cells_gdf = geohashes_to_geometry(pd.DataFrame({"geohash": flat}), "geohash")
-            cells_gdf = gpd.GeoDataFrame(cells_gdf, geometry=cells_gdf["geometry"], crs="EPSG:4326")
             cells_gdf["precision"] = cells_gdf["geohash"].astype(str).str.len()
     except Exception as e:
         st.error(f"Gagal membuat geohash: {e}")
@@ -243,7 +207,7 @@ if gdf_to_use is not None and st.session_state.geohash_converted:
 # Add polygon layer
 if gdf_to_use is not None:
     folium.GeoJson(
-        gdf_to_use.to_json(),
+        df_to_geojson(gdf_to_use),
         name="Polygon (from coordinates)",
         style_function=lambda x: {"color": "#d62728", "weight": 4, "opacity": 1}
     ).add_to(m)
@@ -255,7 +219,7 @@ if cells_gdf is not None and not cells_gdf.empty:
         col = PRECISION_COLORS.get(int(prec), "#8c564b")
         return {"color": col, "weight": 2, "opacity": 1, "fillColor": col, "fillOpacity": 0.2}
     folium.GeoJson(
-        data=cells_gdf.to_json(),
+        data=df_to_geojson(cells_gdf),
         name="Geohash Cells",
         tooltip=folium.GeoJsonTooltip(fields=["geohash", "precision"]),
         style_function=style_fn,
