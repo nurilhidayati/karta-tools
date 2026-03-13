@@ -4,13 +4,6 @@ import pandas as pd
 import geohash2
 from shapely.geometry import Polygon, box, shape
 
-try:
-    import geopandas as gpd
-    HAS_GEOPANDAS = True
-except ImportError:
-    gpd = None
-    HAS_GEOPANDAS = False
-
 from io import StringIO
 import tempfile
 import zipfile
@@ -20,9 +13,7 @@ import requests
 import folium
 from streamlit_folium import st_folium
 
-if not HAS_GEOPANDAS:
-    st.warning("⚠️ Boundary upload (KML/KMZ) requires geopandas. Use **Draw Polygons** or **Copy Coordinates** instead.")
-    st.stop()
+from geo_helpers import geojson_to_df, df_to_geojson_dict
 
 # Convert geohash to polygon
 def geohash_to_polygon(gh):
@@ -353,25 +344,13 @@ if uploaded_boundary_file:
         file_extension = uploaded_boundary_file.name.split('.')[-1].lower()
         
         if file_extension in ['geojson', 'json']:
-            # Read GeoJSON directly
+            # Read GeoJSON directly (no geopandas needed)
             geojson_data = json.loads(uploaded_boundary_file.read().decode('utf-8'))
             st.session_state.boundary_geojson = geojson_data
-            
-        elif file_extension in ['kml', 'kmz']:
-            # Read KML/KMZ using geopandas
-            gdf = gpd.read_file(uploaded_boundary_file)
-            # Convert to GeoJSON
-            geojson_str = gdf.to_json()
-            st.session_state.boundary_geojson = json.loads(geojson_str)
-            
-        elif file_extension in ['shp', 'zip']:
-            # Read Shapefile
-            gdf = gpd.read_file(uploaded_boundary_file)
-            # Convert to GeoJSON
-            geojson_str = gdf.to_json()
-            st.session_state.boundary_geojson = json.loads(geojson_str)
-        
-        st.success(f"✅ Successfully loaded boundary file: {uploaded_boundary_file.name}")
+            st.success(f"✅ Successfully loaded boundary file: {uploaded_boundary_file.name}")
+        else:
+            st.warning("⚠️ Only GeoJSON format is supported. Please convert KML/KMZ/SHP to GeoJSON first (e.g. via QGIS or ogr2ogr).")
+            st.session_state.boundary_geojson = None
         st.session_state.uploaded_boundary = uploaded_boundary_file.name
         
     except Exception as e:
@@ -502,14 +481,13 @@ if uploaded_files:
     for file in uploaded_files:
         st.write(f"Processing: **{file.name}**")
         try:
-            gdf = gpd.read_file(file)
+            geojson_data = json.loads(file.read().decode('utf-8'))
+            df = geojson_to_df(geojson_data)
+            df['geometry'] = df['geometry'].apply(lambda g: g.wkt if g and hasattr(g, 'wkt') else str(g) if g else '')
 
-            # Flatten geometry to WKT or GeoJSON string
-            gdf['geometry'] = gdf['geometry'].apply(lambda geom: geom.wkt)
-
-            csv_name = file.name.replace(".geojson", ".csv")
+            csv_name = file.name.replace(".geojson", ".csv").replace(".json", ".csv")
             csv_path = os.path.join(output_dir, csv_name)
-            gdf.to_csv(csv_path, index=False)
+            df.to_csv(csv_path, index=False)
 
             csv_paths.append(csv_path)
             st.success(f"✅ Converted: {csv_name}")
@@ -563,18 +541,20 @@ if uploaded_files:
         st.write(f"Processing: **{file.name}**")
         df = pd.read_csv(file)
 
-        if 'geoHash' not in df.columns:
-            st.warning(f"Skipped `{file.name}` — missing 'geoHash' column.")
+        geohash_col = 'geoHash' if 'geoHash' in df.columns else ('geohash' if 'geohash' in df.columns else None)
+        if geohash_col is None:
+            st.warning(f"Skipped `{file.name}` — missing 'geoHash' or 'geohash' column.")
             continue
 
         try:
-            df['geometry'] = df['geoHash'].apply(geohash_to_polygon)
-            gdf = gpd.GeoDataFrame(df, geometry='geometry')
-            gdf.set_crs(epsg=4326, inplace=True)
+            df['geometry'] = df[geohash_col].apply(geohash_to_polygon)
+            df = df.dropna(subset=['geometry'])
+            geojson_dict = df_to_geojson_dict(df)
 
             geojson_name = file.name.replace(".csv", ".geojson")
             geojson_path = os.path.join(output_dir, geojson_name)
-            gdf.to_file(geojson_path, driver='GeoJSON')
+            with open(geojson_path, 'w', encoding='utf-8') as f:
+                json.dump(geojson_dict, f, ensure_ascii=False, indent=2)
 
             geojson_paths.append(geojson_path)
             st.success(f"✅ Converted: {geojson_name}")

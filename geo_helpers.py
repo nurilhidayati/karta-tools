@@ -141,12 +141,55 @@ def geohash_cells_to_geojson_dict(df: pd.DataFrame) -> dict:
         feat = {
             "type": "Feature",
             "properties": {
-                "geoHash": str(row.get("geohash", "")),
+                "geoHash": str(row.get("geohash", row.get("geoHash", ""))),
                 "center_lat": round(cent.y, 6),
                 "center_lon": round(cent.x, 6),
-                "precision": int(row.get("precision", len(str(row.get("geohash", "")))))
+                "precision": int(row.get("precision", len(str(row.get("geohash", row.get("geoHash", ""))))))
             },
             "geometry": mapping(geom)
         }
         features.append(feat)
+    return {"type": "FeatureCollection", "features": features}
+
+
+def geojson_to_df(geojson_dict: dict) -> pd.DataFrame:
+    """Convert GeoJSON FeatureCollection to DataFrame with properties + geometry (shapely)."""
+    features = geojson_dict.get("features", [])
+    if not features:
+        return pd.DataFrame(columns=["geometry"])
+
+    rows = []
+    for f in features:
+        geom = f.get("geometry")
+        if not geom:
+            continue
+        try:
+            shapely_geom = shape(geom)
+        except Exception:
+            continue
+        props = dict(f.get("properties", {}))
+        props["geometry"] = shapely_geom
+        rows.append(props)
+
+    if not rows:
+        return pd.DataFrame(columns=["geometry"])
+
+    return pd.DataFrame(rows)
+
+
+def df_to_geojson_dict(df: pd.DataFrame) -> dict:
+    """Convert DataFrame with geometry column to GeoJSON dict (for file download)."""
+    if df is None or df.empty or "geometry" not in df.columns:
+        return {"type": "FeatureCollection", "features": []}
+    features = []
+    for _, row in df.iterrows():
+        geom = row["geometry"]
+        if geom is None or geom.is_empty:
+            continue
+        props = {k: v for k, v in row.items() if k != "geometry" and pd.notna(v)}
+        features.append({
+            "type": "Feature",
+            "properties": props,
+            "geometry": mapping(geom)
+        })
     return {"type": "FeatureCollection", "features": features}
