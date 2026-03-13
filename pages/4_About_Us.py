@@ -2,12 +2,23 @@ import streamlit as st
 from PIL import Image
 import base64
 from io import BytesIO
+import os
 
 # Helper: Convert image to base64 string
 def image_to_base64(img):
     buffered = BytesIO()
     img.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
+
+# Helper: Load image with fallback for missing files (e.g. on Streamlit Cloud deploy)
+def load_team_photo(path: str, default_size=(200, 200)):
+    """Load image from path, return placeholder if missing (working dir = repo root on Cloud)."""
+    try:
+        if os.path.exists(path):
+            return Image.open(path).convert("RGB")
+    except Exception:
+        pass
+    return Image.new("RGB", default_size, color=(200, 200, 200))
 
 # Public Slack icon URL (white background)
 SLACK_ICON_URL = "https://upload.wikimedia.org/wikipedia/commons/7/76/Slack_Icon.png"
@@ -127,19 +138,19 @@ team_members = [
         "name": "Nuril Hidayati",
         "username": "@nuril.hidayati",
         "slack": "https://grab.enterprise.slack.com/team/U07L4CFDP4G",
-        "photo": Image.open('pages/photo_team/nuril.png')
+        "photo": load_team_photo('pages/photo_team/nuril.png')
     },
     {
         "name": "Annisa Dwi Maiikhsantiani",
         "username": "@ms.annisaa.dwi",
         "slack": "https://grab.enterprise.slack.com/team/U05B3JW5494",
-        "photo": Image.open('pages/photo_team/santi.png')
+        "photo": load_team_photo('pages/photo_team/santi.png')
     },
     {
         "name": "Mochammad Fachri",
         "username": "@ms.muhammad.fachri",
         "slack": "https://grab.enterprise.slack.com/team/U06E347FP7E",
-        "photo": Image.open('pages/photo_team/fachri.png')
+        "photo": load_team_photo('pages/photo_team/fachri.png')
     },
 ]
 
@@ -149,13 +160,13 @@ mentors = [
         "name": "Qitfirul",
         "username": "@qithfirul.q",
         "slack": "https://grab.enterprise.slack.com/team/WS6CPUTS8",
-        "photo": Image.open('pages/photo_team/qitfirul.jpg')
+        "photo": load_team_photo('pages/photo_team/qitfirul.jpg')
     },
     {
         "name": "Mahardi Pratomo",
         "username": "@mahardi.pratomo",
         "slack": "https://grab.enterprise.slack.com/team/WS6S9CENR",
-        "photo": Image.open('pages/photo_team/mahardi.jpg')
+        "photo": load_team_photo('pages/photo_team/mahardi.jpg')
     },
 ]
 

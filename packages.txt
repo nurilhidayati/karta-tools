@@ -1,0 +1,4 @@
+# System dependencies for geopandas/fiona (GDAL)
+# Required for Streamlit Community Cloud deployment
+libgdal-dev
+gdal-bin

@@ -123,6 +123,30 @@ For production deployment, consider:
 4. **Set up reverse proxy** (nginx) for HTTPS
 5. **Configure proper logging** and monitoring
 
+## Deploy ke Streamlit Community Cloud
+
+Proyek ini sudah dikonfigurasi untuk deploy di [share.streamlit.io](https://share.streamlit.io/):
+
+1. **Push repository** ke GitHub (harus public untuk Community Cloud gratis).
+2. Buka [share.streamlit.io](https://share.streamlit.io/) → login dengan GitHub → **Create app**.
+3. Isi:
+   - **Repository**: `nurilhidayati/karta-tools` (atau username/repo Anda)
+   - **Branch**: `main`
+   - **Main file path**: `Home.py`
+4. **Advanced settings** (opsional): pilih Python version (default 3.12), tambah secrets jika perlu.
+5. Klik **Deploy** — build memakan waktu 5–10 menit karena instalasi geopandas, folium, dll.
+
+### File untuk Streamlit Cloud
+
+| File | Fungsi |
+|------|--------|
+| `Home.py` | Entry point aplikasi |
+| `requirements.txt` | Dependensi Python (tanpa `win32_setctime` untuk kompatibilitas Linux) |
+| `packages.txt` | Sistem dependensi GDAL untuk geopandas/fiona |
+| `.streamlit/config.toml` | Konfigurasi server headless |
+
+**Catatan:** Foto di `pages/photo_team/` harus di-commit ke repo; jika tidak, halaman About Us menampilkan placeholder abu-abu.
+
 ## Manual Installation (Development)
 
 If you prefer to run without Docker:
