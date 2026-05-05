@@ -46,9 +46,11 @@ def convert_boundary_to_geohash(boundary_geojson, precision_level):
         # Get bounding box
         minx, miny, maxx, maxy = boundary_geom.bounds
         
-        # Add padding to bounding box to ensure edge coverage (especially important for level 8)
+        # Add padding to bounding box to ensure edge coverage (especially important for level 8+)
         # Padding should be larger for higher precision levels to ensure edge cells are captured
-        if precision_level == 8:
+        if precision_level == 9:
+            padding = 0.00015  # ~17m — level 9 cells ~2.4m
+        elif precision_level == 8:
             padding = 0.001  # ~111m padding for level 8 (small cells at edges)
         elif precision_level == 7:
             padding = 0.0008  # ~88m padding for level 7
@@ -67,28 +69,13 @@ def convert_boundary_to_geohash(boundary_geojson, precision_level):
         unique_geohashes = set()
         geohash_features = []
         
-        # Calculate step size based on precision (use smaller steps to avoid gaps)
-        # Level 5: ~5km cells, Level 6: ~1.2km cells, Level 7: ~150m cells, Level 8: ~19m cells
-        # Use step size that's much smaller than the geohash cell size to ensure complete coverage
-        if precision_level == 5:
-            lat_step = 0.004  # Half of cell size
-            lon_step = 0.004
-        elif precision_level == 6:
-            lat_step = 0.0015  # Half of cell size
-            lon_step = 0.0015
-        elif precision_level == 7:
-            lat_step = 0.0005  # Half of cell size
-            lon_step = 0.0005
-        elif precision_level == 8:
-            # For level 8, use very small step to ensure no gaps
-            # Level 8 cells are ~19m, which is ~0.00017 degrees
-            # Use step of ~0.00005 (about 1/3 of cell size) to ensure coverage
-            lat_step = 0.00005
-            lon_step = 0.00005
-        else:
-            # Default to level 6 step size
-            lat_step = 0.0015
-            lon_step = 0.0015
+        # Grid step from actual cell size at this precision (works for level 5–9 and avoids gaps)
+        mid_lat = (miny + maxy) / 2
+        mid_lon = (minx + maxx) / 2
+        ref_gh = geohash2.encode(mid_lat, mid_lon, precision_level)
+        _, _, lat_err, lon_err = geohash2.decode_exactly(ref_gh)
+        lat_step = max(lat_err / 3, 1e-7)
+        lon_step = max(lon_err / 3, 1e-7)
         
         # Generate grid points with better coverage
         current_lat = miny
@@ -366,7 +353,7 @@ if st.session_state.boundary_geojson:
     with col1:
         precision_level = st.selectbox(
             "🎯 Select GeoHash Precision Level",
-            options=[5, 6, 7, 8],
+            options=[5, 6, 7, 8, 9],
             index=1,  # Default to level 6
             help="Higher precision levels create more detailed (smaller) geohash cells"
         )
@@ -389,7 +376,8 @@ if st.session_state.boundary_geojson:
             5: "~5km × 5km cells",
             6: "~1.2km × 1.2km cells",
             7: "~150m × 150m cells",
-            8: "~19m × 19m cells"
+            8: "~19m × 19m cells",
+            9: "~2.4m × 2.4m cells",
         }
         cell_size = precision_info.get(precision_level, "Unknown")
         st.info(f"""

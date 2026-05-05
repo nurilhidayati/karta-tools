@@ -35,6 +35,14 @@ def make_zip_bytes(inner_filename: str, inner_bytes: bytes) -> bytes:
     buf.seek(0)
     return buf.read()
 
+def make_zip_bytes_multi(files: list[tuple[str, bytes]]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for inner_filename, inner_bytes in files:
+            zf.writestr(inner_filename, inner_bytes)
+    buf.seek(0)
+    return buf.read()
+
 def create_geohash_list(gdf: pd.DataFrame, precision: int, inner: bool = False) -> pd.DataFrame:
     """Convert polygon geometries to geohash list using geohash2 (no polygeohasher)."""
     def _geom_to_geohashes(geom):
@@ -43,9 +51,12 @@ def create_geohash_list(gdf: pd.DataFrame, precision: int, inner: bool = False) 
         try:
             bounds = geom.bounds
             minx, miny, maxx, maxy = bounds
-            # Approx cell size per precision: level 6 ~0.002 deg, level 7 ~0.0005, level 8 ~0.00006
-            cell_approx = 0.005 / (2 ** (precision - 4))
-            step = max(cell_approx / 2, 0.00001)
+            mid_lat = (miny + maxy) / 2
+            mid_lon = (minx + maxx) / 2
+            ref_gh = geohash2.encode(mid_lat, mid_lon, precision)
+            _, _, lat_err, lon_err = geohash2.decode_exactly(ref_gh)
+            step_lat = max(lat_err / 3, 1e-7)
+            step_lon = max(lon_err / 3, 1e-7)
             unique_gh = set()
             lat = miny
             while lat <= maxy:
@@ -54,10 +65,10 @@ def create_geohash_list(gdf: pd.DataFrame, precision: int, inner: bool = False) 
                     try:
                         gh = geohash2.encode(lat, lon, precision)
                         if gh in unique_gh:
-                            lon += step
+                            lon += step_lon
                             continue
-                        _, _, lat_err, lon_err = geohash2.decode_exactly(gh)
-                        gh_box = box(lon - lon_err, lat - lat_err, lon + lon_err, lat + lat_err)
+                        _, _, cell_lat_err, cell_lon_err = geohash2.decode_exactly(gh)
+                        gh_box = box(lon - cell_lon_err, lat - cell_lat_err, lon + cell_lon_err, lat + cell_lat_err)
                         if inner:
                             if geom.contains(gh_box.centroid):
                                 unique_gh.add(gh)
@@ -66,8 +77,8 @@ def create_geohash_list(gdf: pd.DataFrame, precision: int, inner: bool = False) 
                                 unique_gh.add(gh)
                     except Exception:
                         pass
-                    lon += step
-                lat += step
+                    lon += step_lon
+                lat += step_lat
             return list(unique_gh)
         except Exception:
             return []
@@ -91,7 +102,7 @@ colA, colB = st.columns(2)
 with colA:
     precision = st.selectbox(
         "🎯 Select GeoHash Precision Level",
-        options=[5, 6, 7, 8],
+        options=[5, 6, 7, 8, 9],
         index=1,  # Default level 6
         help="Higher precision levels create more detailed (smaller) geohash cells"
     )
@@ -101,7 +112,8 @@ with colB:
         5: "~5km × 5km cells",
         6: "~1.2km × 1.2km cells",
         7: "~150m × 150m cells",
-        8: "~19m × 19m cells"
+        8: "~19m × 19m cells",
+        9: "~2.4m × 2.4m cells",
     }
     cell_size = precision_info.get(precision, "Unknown")
     st.info(f"""
@@ -127,6 +139,23 @@ compress_zip = True
 # di render map berikutnya dapat ditampilkan lagi dan dihitung cell-nya.
 if "features_fc" not in st.session_state:
     st.session_state["features_fc"] = {"type": "FeatureCollection", "features": []}
+if "geohash_converted" not in st.session_state:
+    st.session_state.geohash_converted = False
+if "last_converted_draw_snapshot" not in st.session_state:
+    st.session_state.last_converted_draw_snapshot = None
+if "last_convert_precision" not in st.session_state:
+    st.session_state.last_convert_precision = None
+
+def _draw_fc_snapshot() -> str:
+    return json.dumps(st.session_state["features_fc"], sort_keys=True, default=str)
+
+_snap = _draw_fc_snapshot()
+if st.session_state.geohash_converted and st.session_state.last_converted_draw_snapshot is not None:
+    if _snap != st.session_state.last_converted_draw_snapshot:
+        st.session_state.geohash_converted = False
+if st.session_state.geohash_converted and st.session_state.last_convert_precision is not None:
+    if precision != st.session_state.last_convert_precision:
+        st.session_state.geohash_converted = False
 
 # ---------------- Build ONE Map (with Draw + Overlay) ----------------
 m = folium.Map(location=[-6.169689493684541, 106.82936319156342], zoom_start=12, zoom_control=True)
@@ -150,9 +179,9 @@ Geocoder(add_marker=True).add_to(m)
 for tile in ['OpenStreetMap']:
     folium.TileLayer(tile).add_to(m)
 
-# ------ Jika ada gambar tersimpan, hitung cells & overlay di MAP YANG SAMA ------
+# ------ Setelah klik Convert: hitung cells & overlay di MAP YANG SAMA ------
 cells_gdf = None
-if st.session_state["features_fc"]["features"]:
+if st.session_state["features_fc"]["features"] and st.session_state.geohash_converted:
     # Build DataFrame dari gambar tersimpan (tanpa geopandas)
     gdf = features_to_gdf(st.session_state["features_fc"])
     gdf_poly = ensure_polygons(gdf)
@@ -240,7 +269,7 @@ folium.LayerControl(position='bottomleft', collapsed=False).add_to(m)
 
 # ---------------- Render ONE MAP (draw + overlay) ----------------
 st.subheader("Gambar area & lihat overlay cells pada peta yang sama")
-st.caption("Setiap selesai menggambar, aplikasi otomatis rerun → overlay cells diperbarui di map ini.")
+st.caption("Selesai menggambar, klik **Convert to GeoHash** di bawah untuk menampilkan sel di peta dan mengaktifkan unduhan.")
 st_map = st_folium(
     m,
     width=1200, height=700,
@@ -271,9 +300,34 @@ fc_new = extract_features(st_map)
 if fc_new["features"]:
     st.session_state["features_fc"] = fc_new
 
+# ---------------- Convert & Clear (setelah gambar terbaru masuk session_state) ----------------
+st.subheader("Convert")
+col_conv, col_clear = st.columns(2)
+with col_conv:
+    if st.session_state["features_fc"]["features"]:
+        if st.button("🔄 Convert to GeoHash", type="primary", use_container_width=True, key="btn_draw_convert"):
+            st.session_state.geohash_converted = True
+            st.session_state.last_converted_draw_snapshot = json.dumps(
+                st.session_state["features_fc"], sort_keys=True, default=str
+            )
+            st.session_state.last_convert_precision = precision
+            st.rerun()
+    else:
+        st.info("Gambar polygon di peta terlebih dahulu.")
+with col_clear:
+    if st.button("🗑️ Clear drawing", type="secondary", use_container_width=True, key="btn_draw_clear"):
+        st.session_state["features_fc"] = {"type": "FeatureCollection", "features": []}
+        st.session_state.geohash_converted = False
+        st.session_state.last_converted_draw_snapshot = None
+        st.session_state.last_convert_precision = None
+        st.rerun()
+
+if st.session_state["features_fc"]["features"] and not st.session_state.geohash_converted:
+    st.caption("Klik **Convert to GeoHash** untuk menghitung sel dan membuka unduhan.")
+
 # ---------------- Panel hasil & unduhan ----------------
 st.subheader("Download Data")
-if st.session_state["features_fc"]["features"]:
+if st.session_state["features_fc"]["features"] and st.session_state.geohash_converted:
     # Hitung ulang daftar geohash dari gambar tersimpan (konsisten dengan overlay)
     gdf_saved = features_to_gdf(st.session_state["features_fc"])
     gdf_saved = ensure_polygons(gdf_saved)
@@ -291,38 +345,53 @@ if st.session_state["features_fc"]["features"]:
         flat2 = pd.Series([], dtype=str)
 
     st.caption(f"Geohash Level: {precision} | Total Geohash Unique: {len(flat2)}")
-    joined_comma = ",".join(flat2.tolist())
 
     # Build cells_all untuk export GeoJSON & CSV (format seperti 3_Tools_Add_On)
     cells_all = geohashes_to_geometry(pd.DataFrame({"geohash": flat2}), "geohash")
     cells_all["precision"] = cells_all["geohash"].astype(str).str.len()
 
+    filename_geojson = f"draw_geohash_level_{precision}.geojson"
+    filename_csv = f"draw_geohash_level_{precision}.csv"
+    geojson_dict = geohash_cells_to_geojson_dict(cells_all)
+    geojson_str = json.dumps(geojson_dict, ensure_ascii=False, indent=2)
+    csv_data = geohash_cells_to_csv(cells_all)
+
+    st.download_button(
+        label="📥 Download (ZIP: GeoJSON + CSV)",
+        data=make_zip_bytes_multi(
+            [(filename_geojson, geojson_str.encode("utf-8")), (filename_csv, csv_data.encode("utf-8") if csv_data else b"")]
+        )
+        if csv_data
+        else make_zip_bytes(filename_geojson, geojson_str.encode("utf-8")),
+        file_name=f"draw_geohash_level_{precision}.zip",
+        mime="application/zip",
+        type="primary",
+        use_container_width=True,
+        key="download_draw_zip",
+    )
+
     col_geo, col_csv = st.columns(2)
-
     with col_geo:
-        geojson_dict = geohash_cells_to_geojson_dict(cells_all)
-        geojson_str = json.dumps(geojson_dict, ensure_ascii=False, indent=2)
-        filename_geojson = f"draw_geohash_level_{precision}.geojson"
         st.download_button(
-                label="📄 Download GeoHash GeoJSON",
-                data=geojson_str,
-                file_name=filename_geojson,
-                mime="application/geo+json",
-                key="download_draw_geojson"
-            )
-
+            label="📄 Download GeoHash GeoJSON",
+            data=geojson_str,
+            file_name=filename_geojson,
+            mime="application/geo+json",
+            key="download_draw_geojson",
+        )
     with col_csv:
-        csv_data = geohash_cells_to_csv(cells_all)
         if csv_data:
-            filename_csv = f"draw_geohash_level_{precision}.csv"
             st.download_button(
-                    label="📊 Download GeoHash CSV",
-                    data=csv_data,
-                    file_name=filename_csv,
-                    mime="text/csv",
-                    key="download_draw_csv"
-                )
+                label="📊 Download GeoHash CSV",
+                data=csv_data,
+                file_name=filename_csv,
+                mime="text/csv",
+                key="download_draw_csv",
+            )
         else:
             st.warning("Tidak ada data untuk CSV")
 
-      
+elif st.session_state["features_fc"]["features"]:
+    st.info("Klik **Convert to GeoHash** di atas untuk mengaktifkan unduhan.")
+else:
+    st.info("Gambar polygon di peta, lalu **Convert to GeoHash** untuk hasil dan unduhan.")
